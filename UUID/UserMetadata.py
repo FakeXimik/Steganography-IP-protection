@@ -1,8 +1,7 @@
 from datetime import datetime
 
 class UserMetadata:
-
-    """A class to generate and store metadata for a given text and author for later insertion to the image metadata."""
+    """Class to generate and store metadata"""
 
     def __init__(self, author: str, text: str):
         self.author = author
@@ -11,7 +10,7 @@ class UserMetadata:
         self.copyright_info = f"Copyright {datetime.now().year}, All Rights Reserved"
 
     def get_metadata(self) -> dict:
-        """Returns the generated metadata as a dictionary."""
+        """Returns the generated metadata as a dictionary"""
 
         return {
             "author": self.author,
