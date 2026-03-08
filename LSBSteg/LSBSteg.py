@@ -1,6 +1,7 @@
+import numpy as np
+
 class SteganographyException(Exception):
     pass
-
 
 class LSBSteg():
     def __init__(self, image):
