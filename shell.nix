@@ -6,6 +6,7 @@ in pkgs.mkShell {
     (pkgs.python313.withPackages (python-pkgs: with python-pkgs; [
       torch
       opencv4
+      numpy
     ]))
   ];
 }
