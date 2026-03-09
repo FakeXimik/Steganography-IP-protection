@@ -1,22 +1,8 @@
 import json
 import hashlib
-import uuid
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
-from UserMetadata import UserMetadata
-
-class User:
-    """ Class to simulate users + creates unique ECC pairs for them"""
-
-    def __init__(self, username: str):
-        self.username = username
-        self.private_key = ec.generate_private_key(ec.SECP256R1())
-        self.public_key =  self.private_key.public_key()
-    
-    def __str__(self):
-        return f"Username: {self.username} \nPublic key: {self.public_key}"
-
 
 def proccess_and_sign_metadata(metadata_dict: dict, private_key) -> dict:
     """Parses a dictionary, generates a SHA-256 hash and signs it using ECC"""
@@ -36,7 +22,6 @@ def proccess_and_sign_metadata(metadata_dict: dict, private_key) -> dict:
         "sha256_hash": sha256_hash,
         "signature_hex": signature.hex() # Convert to hex for readable output
     }
-
 
 def verify_signature(signature_hex, public_key, og_json_string):
     signature_bytes = bytes.fromhex(signature_hex) 
@@ -62,24 +47,3 @@ def retrieve_data(og_json_string):
     print(f"The author is: {recovered_dict['author']}")
     print(f"The secret message is: {recovered_dict['data']}")
 
-
-#--------------------------------------------------- basic tests
-
-if __name__ == "__main__":
-    print ('---------------------------------------------------')
-    user1 = User("Cool dude")
-    print(user1)
-    print ('---------------------------------------------------')
-    metadata_dict1 = UserMetadata("Sam", "This data is protected because I said so.").get_metadata()
-    print(metadata_dict1)
-    print ('---------------------------------------------------')
-signed_metadata = proccess_and_sign_metadata(metadata_dict1, user1.private_key)
-
-print(signed_metadata)
-print ('---------------------------------------------------')
-is_valid = verify_signature(signed_metadata['signature_hex'], user1.public_key, signed_metadata['serialized_data'])
-print ('---------------------------------------------------')
-if (is_valid):
-    retrieve_data(signed_metadata['serialized_data'])
-print ('---------------------------------------------------')
-print(uuid.uuid4())
