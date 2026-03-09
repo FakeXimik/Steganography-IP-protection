@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization
 if __name__ == "__main__":
     # Generate user + dummy metadata and sign it
     print ('---------------------------------------------------')
-    user1 = User("Cool dude 2")
+    user1 = User("Cool dude", b"Cool password")
     print(user1)
     print ('---------------------------------------------------')
     userData1 = UserMetadata("Sam", "This data is protected because I said so.").get_metadata()
