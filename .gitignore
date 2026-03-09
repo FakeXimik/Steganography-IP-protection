@@ -209,7 +209,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-
 .vscode
-.env
 postgres_data/
+.vscode/settings.json
