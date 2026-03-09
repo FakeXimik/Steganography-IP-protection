@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS metadata (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE, 
-    sha_256 CHAR(64) UNIQUE NOT NULL,
+    sha256_hash CHAR(64) UNIQUE NOT NULL,
     signature_hex VARCHAR(255) UNIQUE NOT NULL,
     metadata_content JSONB NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP 

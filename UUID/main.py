@@ -1,5 +1,6 @@
 from models import *
 from crypto import *
+from database import *
 
 #----------- basic tests
 
@@ -21,3 +22,5 @@ if __name__ == "__main__":
     if (is_valid):
         retrieve_data(signed_metadata['serialized_data'])
     print ('---------------------------------------------------')
+
+    save_to_db(user1, signed_metadata)
