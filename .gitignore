@@ -212,3 +212,4 @@ __marimo__/
 .vscode
 postgres_data/
 .vscode/settings.json
+*.pem
