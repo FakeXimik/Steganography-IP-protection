@@ -38,7 +38,7 @@ def save_to_db(user_obj, signed_data: dict):
         user_uuid = cur.fetchone()[0]
 
         metadata_sql = """
-            INSERT INTO metadata (user_id, sha_256, signature_hex, metadata_content)
+            INSERT INTO metadata (user_id, sha256_hash, signature_hex, metadata_content)
             VALUES(%s, %s, %s, %s)
             RETURNING id;
             """
