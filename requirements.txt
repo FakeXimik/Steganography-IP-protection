@@ -5,3 +5,4 @@ numpy==2.3.4
 cryptography
 psycopg2
 dotenv
+reedsolo
