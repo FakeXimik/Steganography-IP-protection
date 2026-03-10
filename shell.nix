@@ -8,6 +8,8 @@ in pkgs.mkShell {
       opencv4
       numpy
       pytest
+      cryptography
+      psycopg2
     ]))
   ];
 }

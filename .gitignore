@@ -208,6 +208,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
+StegDB.session.sql
 
 .vscode
+postgres_data/
+.vscode/settings.json
+*.pem
