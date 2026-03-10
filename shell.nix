@@ -7,6 +7,8 @@ in pkgs.mkShell {
       torch
       opencv4
       numpy
+      cryptography
+      psycopg2
     ]))
   ];
 }
