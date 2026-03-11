@@ -3,8 +3,6 @@ let
 
 in pkgs.mkShell {
   packages = [
-    vi
-
     (pkgs.python313.withPackages (python-pkgs: with python-pkgs; [
       torch
       torchvision
