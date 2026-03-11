@@ -8,6 +8,7 @@ in pkgs.mkShell {
       torchvision
       opencv4
       numpy
+      pytest
       cryptography
       psycopg2
     ]))
