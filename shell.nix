@@ -5,6 +5,7 @@ in pkgs.mkShell {
   packages = [
     (pkgs.python313.withPackages (python-pkgs: with python-pkgs; [
       torch
+      torchvision
       opencv4
       numpy
       cryptography
