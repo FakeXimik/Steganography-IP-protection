@@ -1,0 +1,33 @@
+# Use "pip install ." to setup project
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["UUID", "LSBSteg", "ReedSolomon", "DataLoader"]
+
+[project]
+name = "steganography-IP-protection"
+version = "0.1.0"
+description = "A system for hiding signed metadata in images"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "cryptography",
+    "opencv-python",
+    "dotenv",
+    "psycopg2",
+    "numpy",
+    "reedsolo",
+    "torch",
+    "torchvision"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest"
+]
+
+[tool.pytest.ini_options]
+
