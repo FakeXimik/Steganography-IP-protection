@@ -11,7 +11,13 @@ class User:
         self.password = password
         self.key_filename = f"{username}_private_key.pem"
         
-        if os.path.exists(self.key_filename):
+        self.home_dir = os.path.expanduser("~")
+        self.steg_dir = os.path.join(self.home_dir, '.stegAI')
+        self.pem_file_path = os.path.join(self.steg_dir, self.key_filename)
+
+        os.makedirs(self.steg_dir, exist_ok=True)
+
+        if os.path.exists(self.pem_file_path):
             print(f"Sup, {username}! Decrypting your saved private key...")
             self.private_key = self._load_private_key()
         else:
@@ -29,13 +35,13 @@ class User:
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.BestAvailableEncryption(self.password) 
         )
-        with open(self.key_filename, 'wb') as f:
+        with open(self.pem_file_path, 'wb') as f:
             f.write(pem_bytes)
 
     def _load_private_key(self):
         """Loads and unlocks the private key using the password"""
 
-        with open(self.key_filename, 'rb') as key_file:
+        with open(self.pem_file_path, 'rb') as key_file:
             private_key = serialization.load_pem_private_key(
                 key_file.read(),
                 password=self.password,
