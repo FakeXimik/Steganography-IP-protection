@@ -1,11 +1,12 @@
 from cryptography.hazmat.primitives import serialization
 import json
 import cv2
-from UUID.models import *
-from UUID.crypto import *
-from UUID.database import *
-from ReedSolomon.fec_pipeline import *
-from LSBSteg.LSBSteg import *
+from models.user import *
+from models.userMetadata import *
+from utils.crypto import *
+from data.database import *
+from utils.fec import *
+from models.LSBSteg import *
 
 if __name__ == "__main__":
 
