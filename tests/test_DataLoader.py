@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from DataLoader import CIFAR100
+from data.cifar_loader import CIFAR100
 
 def test_data():
     cifar = CIFAR100() # Default download folder is #root#/Assets/cifar-100
