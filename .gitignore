@@ -214,3 +214,6 @@ StegDB.session.sql
 postgres_data/
 .vscode/settings.json
 *.pem
+
+# Ignore trained PyTorch model weights
+saved_models/
