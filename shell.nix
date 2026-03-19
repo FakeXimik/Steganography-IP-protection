@@ -13,6 +13,7 @@ in pkgs.mkShell {
       psycopg2
       python-dotenv
       reedsolo
+      kornia
     ]))
   ];
 }
