@@ -8,7 +8,7 @@ from pathlib import Path
 class CIFAR100:
     def __init__(
             self,
-            data_root: Path = Path.cwd() / "Assets" / "cifar-100",
+            data_root: Path = Path.cwd() / "assets" / "cifar-100",
             transform: torchvision.transforms.Compose = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))]),
             num_workers: int = 2,
             batch_size: int = 64

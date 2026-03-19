@@ -6,6 +6,8 @@ import torchvision.transforms as transforms
 from torchvision.utils import save_image
 import os
 
+from models.noise import StandardNoiseLayer
+
 # ==========================================
 # 1. ACTUAL HIDDEN ARCHITECTURE 
 # ==========================================
@@ -59,11 +61,6 @@ class HiddenDiscriminator(nn.Module):
         x = self.convs(img)
         x = self.global_pool(x).view(x.size(0), -1)
         return self.linear(x)
-
-class StandardNoiseLayer(nn.Module):
-    def forward(self, stego_img, cover_img):
-        mask = (torch.rand_like(stego_img) > 0.3).float()
-        return stego_img * mask + cover_img * (1 - mask)
 
 # ==========================================
 # 2. LOSS FUNCTIONS & VISUAL TEST

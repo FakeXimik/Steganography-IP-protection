@@ -4,7 +4,7 @@ import torch
 from data.cifar_loader import CIFAR100
 
 def test_data():
-    cifar = CIFAR100() # Default download folder is #root#/Assets/cifar-100
+    cifar = CIFAR100() # Default download folder is #root#/assets/cifar-100
 
     train_loader = cifar.train_loader
 
