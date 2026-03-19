@@ -11,6 +11,8 @@ in pkgs.mkShell {
       pytest
       cryptography
       psycopg2
+      python-dotenv
+      reedsolo
     ]))
   ];
 }

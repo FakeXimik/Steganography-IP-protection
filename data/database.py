@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def save_to_db(user_obj, signed_data: dict):
+    conn = None
 
     try:
         conn = psycopg2.connect(
