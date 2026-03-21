@@ -19,7 +19,8 @@ dependencies = [
     "python-dotenv==1.2.2",
     "reedsolo==1.7.0",
     "torch==2.10.0",
-    "torchvision==0.25.0"
+    "torchvision==0.25.0",
+    "kornia"
 ]
 
 [project.optional-dependencies]
