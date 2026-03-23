@@ -1,5 +1,6 @@
 # Folder to hold data temporarily
 Assets
+assets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -214,3 +215,6 @@ StegDB.session.sql
 postgres_data/
 .vscode/settings.json
 *.pem
+
+# Ignore trained PyTorch model weights
+saved_models/

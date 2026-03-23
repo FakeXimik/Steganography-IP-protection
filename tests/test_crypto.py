@@ -1,6 +1,6 @@
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
-from UUID.crypto import *
+from utils.crypto import *
 
 @pytest.fixture
 def dummy_key():
