@@ -3,13 +3,21 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from torchvision.utils import save_image
 import os
-
-from models.noise import StandardNoiseLayer
+import uuid
 
 # ==========================================
-# 1. ACTUAL HIDDEN ARCHITECTURE 
+# 1. TEAM IMPORTS (Modular Architecture)
+# ==========================================
+# Importing from the newly named CIFAR files
+from models.encoder_CIFAR import EncoderCIFAR
+from models.decoder_CIFAR import DecoderCIFAR
+from models.noise import StandardNoiseLayer
+
+from utils.fec import RSCodecPipeline
+
+# ==========================================
+# 2. DISCRIMINATOR (Kept local since no file exists yet)
 # ==========================================
 class ConvBNRelu(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -20,35 +28,6 @@ class ConvBNRelu(nn.Module):
             nn.ReLU(inplace=True)
         )
     def forward(self, x): return self.conv(x)
-
-class HiddenEncoder(nn.Module):
-    def __init__(self, payload_length):
-        super().__init__()
-        self.payload_length = payload_length
-        self.features = nn.Sequential(*[ConvBNRelu(3 if i==0 else 64, 64) for i in range(4)])
-        self.post_concat = ConvBNRelu(64 + payload_length + 3, 64)
-        self.final_conv = nn.Conv2d(64, 3, kernel_size=1, stride=1, padding=0)
-
-    def forward(self, img, message):
-        img_features = self.features(img)
-        B, _, H, W = img.shape
-        msg_expanded = message.unsqueeze(-1).unsqueeze(-1).expand(B, self.payload_length, H, W)
-        concat_features = torch.cat([img_features, msg_expanded, img], dim=1)
-        stego_img = self.final_conv(self.post_concat(concat_features))
-        return stego_img
-
-class HiddenDecoder(nn.Module):
-    def __init__(self, payload_length):
-        super().__init__()
-        self.convs = nn.Sequential(*[ConvBNRelu(3 if i==0 else 64, 64) for i in range(7)])
-        self.final_conv = ConvBNRelu(64, payload_length)
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.linear = nn.Linear(payload_length, payload_length)
-
-    def forward(self, noised_img):
-        x = self.final_conv(self.convs(noised_img))
-        x = self.global_pool(x).view(x.size(0), -1)
-        return self.linear(x)
 
 class HiddenDiscriminator(nn.Module):
     def __init__(self):
@@ -63,7 +42,7 @@ class HiddenDiscriminator(nn.Module):
         return self.linear(x)
 
 # ==========================================
-# 2. LOSS FUNCTIONS & VISUAL TEST
+# 3. LOSS FUNCTIONS & METRICS
 # ==========================================
 class HiDDeNLoss(nn.Module):
     def __init__(self, lambda_i=0.7, lambda_g=0.001):
@@ -87,50 +66,53 @@ def calculate_ber(decoded_logits, original_message):
     errors = (predicted_bits != original_message).sum().item()
     return errors / original_message.numel()
 
-def save_models_and_visual_test(encoder, decoder, device, payload_length):
-    print("\n--- SAVING MODELS & GENERATING VISUAL TEST ---")
-    os.makedirs("saved_models", exist_ok=True)
+# ==========================================
+# 4. REAL UUID PAYLOAD GENERATOR
+# ==========================================
+def generate_real_payloads(batch_size, device):
+    """Generates real UUIDs, applies Reed-Solomon FEC, and converts to bit tensors."""
+    fec = RSCodecPipeline(parity_symbols=10)
+    batch_payloads = []
     
-    torch.save(encoder.state_dict(), "saved_models/hidden_encoder.pth")
-    torch.save(decoder.state_dict(), "saved_models/hidden_decoder.pth")
-    print("Model weights saved to /saved_models/")
-
-    encoder.eval() 
-    transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, transform=transform)
-    cover_image = test_dataset[0][0].unsqueeze(0).to(device) 
-    
-    test_payload = torch.randint(0, 2, (1, payload_length)).float().to(device)
-    
-    with torch.no_grad():
-        stego_image = encoder(cover_image, test_payload)
+    for _ in range(batch_size):
+        dummy_uuid = str(uuid.uuid4())
+        encoded_bytes = fec.encode_uuid(dummy_uuid) # 16 UUID + 10 Parity = 26 bytes
         
-    noise_pattern = torch.abs(cover_image - stego_image) * 15 
-    comparison = torch.cat([cover_image, stego_image, noise_pattern], dim=3)
-    save_image(comparison, "saved_models/visual_test.png")
-    print("Visual test saved! Check 'saved_models/visual_test.png' to see the results.")
+        # Convert bytes to bits (0s and 1s)
+        bits = []
+        for byte in encoded_bytes:
+            for i in range(8):
+                bits.append((byte >> (7 - i)) & 1)
+        batch_payloads.append(bits)
+        
+    return torch.tensor(batch_payloads, dtype=torch.float32).to(device)
 
 # ==========================================
-# 3. THE MASTER TRAINING LOOP
+# 5. THE MASTER TRAINING LOOP
 # ==========================================
 def run_training_loop():
-    print("\n--- INITIALIZING HiDDeN PHASE 2 TRAINING PIPELINE ---")
+    print("\n--- INITIALIZING HiDDeN PHASE 3 (PRODUCTION PIPELINE) ---")
     batch_size = 128 
-    payload_length = 208 
+    payload_length = 208 # 26 bytes * 8 bits
     epochs = 5
     lr = 1e-3
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training on device: {device}")
     
-    print("Ingesting CIFAR-10 Dataset...")
+    print("Ingesting CIFAR-100 Dataset...")
     transform = transforms.Compose([transforms.ToTensor()])
+    
+    # SWAPPED TO CIFAR-100
     train_loader = torch.utils.data.DataLoader(
-        torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform),
+        torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform),
         batch_size=batch_size, shuffle=True
     )
     
-    encoder = HiddenEncoder(payload_length).to(device)
-    decoder = HiddenDecoder(payload_length).to(device)
-    discriminator = HiddenDiscriminator().to(device)
+    # Initialize imported networks
+    # Note: Assuming your teammates kept the class names 'HiddenEncoder', 'HiddenDecoder', etc.
+    encoder = EncoderCIFAR(payload_length).to(device)
+    decoder = DecoderCIFAR(payload_length).to(device)
+    discriminator = HiddenDiscriminator().to(device) 
     noise_layer = StandardNoiseLayer().to(device)
     
     criterion = HiDDeNLoss(lambda_i=0.7, lambda_g=0.001).to(device)
@@ -141,7 +123,9 @@ def run_training_loop():
         for i, (images, _) in enumerate(train_loader):
             cover_images = images.to(device)
             current_batch_size = cover_images.size(0)
-            payloads = torch.randint(0, 2, (current_batch_size, payload_length)).float().to(device)
+            
+            # USE REAL REED-SOLOMON UUIDS INSTEAD OF RANDOM BITS
+            payloads = generate_real_payloads(current_batch_size, device)
             
             # STEP A: Train Discriminator
             opt_disc.zero_grad()
@@ -157,7 +141,7 @@ def run_training_loop():
             # STEP B: Train Encoder/Decoder
             opt_enc_dec.zero_grad()
             stego_images = encoder(cover_images, payloads)
-            noisy_images = noise_layer(stego_images, cover_images)
+            noisy_images = noise_layer(stego_images, cover_images) 
             extracted_payloads = decoder(noisy_images)
             d_fake_logits_for_gen = discriminator(stego_images)
             
@@ -173,8 +157,11 @@ def run_training_loop():
 
         print(f"--> Epoch {epoch+1} Completed!")
 
-    # Exactly here: save everything after all epochs!
-    save_models_and_visual_test(encoder, decoder, device, payload_length)
+    print("\n--- SAVING PRODUCTION MODELS ---")
+    os.makedirs("saved_models", exist_ok=True)
+    torch.save(encoder.state_dict(), "saved_models/hidden_encoder.pth")
+    torch.save(decoder.state_dict(), "saved_models/hidden_decoder.pth")
+    print("Model weights saved to /saved_models/")
 
 if __name__ == "__main__":
     run_training_loop()
