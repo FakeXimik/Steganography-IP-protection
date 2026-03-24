@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import psycopg2
-from data.database import save_to_db, retrieve_from_db
+from utils.database import save_to_db, retrieve_from_db
 
 # --- FIXTURES ---
 
@@ -25,8 +25,8 @@ def mock_signed_data():
 
 # --- TESTS FOR SAVE_TO_DB ---
 
-@patch("psycopg2.connect")
-def test_save_to_db_success(mock_connect, mock_user, mock_signed_data):
+@patch("utils.database.psycopg2.connect")
+def test_save_to_db_success(mock_connect, mock_user: MagicMock, mock_signed_data: dict[str, str]):
     # 1. Setup the fake database connection and cursor
     mock_conn = MagicMock()
     mock_cur = MagicMock()
@@ -44,8 +44,8 @@ def test_save_to_db_success(mock_connect, mock_user, mock_signed_data):
     mock_conn.commit.assert_called_once()
     assert result == "meta-456"
 
-@patch("psycopg2.connect")
-def test_save_to_db_integrity_error(mock_connect, mock_user, mock_signed_data):
+@patch("utils.database.psycopg2.connect")
+def test_save_to_db_integrity_error(mock_connect, mock_user: MagicMock, mock_signed_data: dict[str, str]):
     # Setup mocks
     mock_conn = MagicMock()
     mock_cur = MagicMock()
@@ -63,7 +63,7 @@ def test_save_to_db_integrity_error(mock_connect, mock_user, mock_signed_data):
 
 # --- TESTS FOR RETRIEVE_FROM_DB ---
 
-@patch("psycopg2.connect")
+@patch("utils.database.psycopg2.connect")
 def test_retrieve_from_db_success(mock_connect):
     mock_conn = MagicMock()
     mock_cur = MagicMock()
@@ -81,7 +81,7 @@ def test_retrieve_from_db_success(mock_connect):
     assert result["public_key_hex"] == "pub456"
     assert result["signature_hex"] == "sig123"
 
-@patch("psycopg2.connect")
+@patch("utils.database.psycopg2.connect")
 def test_retrieve_from_db_not_found(mock_connect):
     mock_conn = MagicMock()
     mock_cur = MagicMock()
