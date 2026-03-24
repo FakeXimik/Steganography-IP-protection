@@ -218,3 +218,18 @@ postgres_data/
 
 # Ignore trained PyTorch model weights
 saved_models/
+
+# Datasets
+data/cifar-100-python.tar.gz
+data/cifar-100-batches-py/
+*.tar.gz
+*.zip
+*.bin
+
+# Model Checkpoints (Big binary files)
+saved_models/*.pth
+*.pt
+data/cifar-100-python/file.txt~
+data/cifar-100-python/meta
+data/cifar-100-python/test
+data/cifar-100-python/train
