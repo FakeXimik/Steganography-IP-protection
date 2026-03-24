@@ -10,7 +10,7 @@ name = "steganography-IP-protection"
 version = "0.1.0"
 description = "A system for hiding signed metadata in images"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "cryptography==46.0.5",
     "numpy==2.4.3",
@@ -20,13 +20,13 @@ dependencies = [
     "reedsolo==1.7.0",
     "torch==2.10.0",
     "torchvision==0.25.0",
-    "kornia"
+    "kornia==0.8.2"
 ]
 
 [project.optional-dependencies]
 test = [
-    "pytest>=7.0.0",
-    "pytest-mock>=3.10.0"
+    "pytest==9.0.2",
+    "pytest-mock==3.15.1"
 ]
 
 [tool.pytest.ini_options]
