@@ -46,7 +46,7 @@ class HiddenDiscriminator(nn.Module):
 # 3. LOSS FUNCTIONS & METRICS
 # ==========================================
 class HiDDeNLoss(nn.Module):
-    def __init__(self, lambda_i=0.7, lambda_g=0.001):
+    def __init__(self, lambda_i=0.5, lambda_g=0.001):
         super().__init__()
         self.mse_loss = nn.MSELoss() 
         self.bce_with_logits = nn.BCEWithLogitsLoss() 
@@ -102,7 +102,7 @@ def run_training_loop():
     print("\n--- INITIALIZING HiDDeN PRODUCTION PIPELINE (RTX 4080 OPTIMIZED) ---")
     
     # --- Configuration ---
-    batch_size = 128 
+    batch_size = 128
     payload_length = 208 
     epochs = 100         
     lr = 1e-3
@@ -132,7 +132,7 @@ def run_training_loop():
         # Step 1: Tighten image quality after the network figures out the message
         if epoch == 40:
             print("\n[SYSTEM] Increasing Image Fidelity Constraint (lambda_i -> 0.7)")
-            criterion.lambda_i = 0.7
+            criterion.lambda_i = 0.6
             
         encoder.train()
         decoder.train()
@@ -169,7 +169,7 @@ def run_training_loop():
             # NOISE RAMPING: 
             # Epochs 0-15: No Noise (Let the models learn to talk)
             # Epochs 16+: Apply standard noise (Make the models robust)
-            if epoch > 15:
+            if epoch > 20:
                 noisy_images = noise_layer(stego_images, cover_images) 
             else:
                 noisy_images = stego_images
@@ -194,7 +194,7 @@ def run_training_loop():
             # ----------------------------
             if (i+1) % 100 == 0: 
                 ber = calculate_ber(extracted_payloads, payloads)
-                noise_status = "ON" if epoch > 15 else "OFF"
+                noise_status = "ON" if epoch > 19 else "OFF"
                 print(f"Epoch [{epoch+1}/{epochs}] | Step [{i+1}/{len(train_loader)}] "
                       f"| BER: {ber:.2%} | Noise: {noise_status} | L_Img: {l2_loss.item():.4f}")
 

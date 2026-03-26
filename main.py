@@ -4,7 +4,7 @@ import cv2
 from models.user import *
 from models.userMetadata import *
 from utils.crypto import *
-from data.database import *
+from utils.database import *
 from utils.fec import *
 from models.LSBSteg import *
 
