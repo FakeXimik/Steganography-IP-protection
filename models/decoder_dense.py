@@ -43,11 +43,5 @@ class DecoderDense(nn.Module):
         x2 = self.conv2(x1)
         x3 = self.conv3(torch.cat([x1, x2], dim=1))
         x4 = self.conv4(torch.cat([x1, x2, x3], dim=1))
-        
-        # SPATIAL AGGREGATION 
-        # x4 shape: (Batch_Size, Data_Depth, Height, Width)
-        # We average across Height (dim=2) and Width (dim=3) to compress it
-        # Final Output shape: (Batch_Size, Data_Depth)
-        extracted_message = torch.mean(x4, dim=(2, 3))
-        
-        return extracted_message
+        return x4
+
