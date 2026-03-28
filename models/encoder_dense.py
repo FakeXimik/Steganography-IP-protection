@@ -37,15 +37,11 @@ class EncoderDense(nn.Module):
         )
 
     def forward(self, image, message):
-        # Expand 1D message to 2D image dim
-        batch_size, _, height, width = image.shape
-        message_expanded = message.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, height, width)
-
         # Initialize layers
         x1 = self.conv1(image)
-        x2 = self.conv2(torch.cat([x1, message_expanded], dim=1))
-        x3 = self.conv3(torch.cat([x1, x2, message_expanded], dim=1))
-        noise_map = self.conv4(torch.cat([x1, x2, x3, message_expanded], dim=1))
+        x2 = self.conv2(torch.cat([x1, message], dim=1))
+        x3 = self.conv3(torch.cat([x1, x2, message], dim=1))
+        noise_map = self.conv4(torch.cat([x1, x2, x3, message], dim=1))
 
         # 3. Residual Connection (SteganoGAN's add_image = True)
         return image + noise_map
