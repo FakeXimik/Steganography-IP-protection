@@ -1,0 +1,268 @@
+import os
+import uuid
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import torchvision.transforms as transforms
+import lpips  # Perceptual Loss
+
+# ==========================================
+# 1. PHASE 3 IMPORTS
+# ==========================================
+from models.encoder_dense import EncoderDense
+from models.decoder_dense import DecoderDense
+from models.noise import AdvancedNoiseLayer # Student B's MBRS layer
+from utils.fec import RSCodecPipeline
+
+# ==========================================
+# 2. HIGH-RESOLUTION DATA PIPELINE
+# ==========================================
+class HighResImageFolder(Dataset):
+    """
+    Custom loader for massive images (MS-COCO/Div2K) to prevent GPU bottlenecks.
+    Pulls pristine 512x512 patches instead of warping the image.
+    """
+    def __init__(self, root_dir):
+        self.root_dir = root_dir
+        self.image_files = [f for f in os.listdir(root_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        
+        # Extracts pristine patches without distorting the frequency domain
+        self.transform = transforms.Compose([
+            transforms.RandomCrop(512, pad_if_needed=True), 
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor()
+        ])
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.root_dir, self.image_files[idx])
+        try:
+            image = Image.open(img_path).convert('RGB')
+            return self.transform(image)
+        except Exception:
+            # Fallback for corrupted images in massive datasets
+            return self.__getitem__((idx + 1) % len(self))
+
+# ==========================================
+# 3. DISCRIMINATOR
+# ==========================================
+class ConvBNRelu(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+    def forward(self, x): return self.conv(x)
+
+class HiddenDiscriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.convs = nn.Sequential(*[ConvBNRelu(3 if i==0 else 64, 64) for i in range(3)])
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.linear = nn.Linear(64, 1) 
+
+    def forward(self, img):
+        x = self.convs(img)
+        x = self.global_pool(x).view(x.size(0), -1)
+        return self.linear(x)
+
+# ==========================================
+# 4. PERCEPTUAL LOSS & METRICS
+# ==========================================
+class HighResHiDDeNLoss(nn.Module):
+    def __init__(self, device, lambda_m=10.0, lambda_i=0.3, lambda_g=0.001, lambda_p=1.5):
+        super().__init__()
+        self.mse_loss = nn.MSELoss() 
+        self.bce_with_logits = nn.BCEWithLogitsLoss() 
+        # Integration of Learned Perceptual Image Patch Similarity
+        self.lpips_loss = lpips.LPIPS(net='vgg').to(device)
+        
+        self.lambda_m = lambda_m
+        self.lambda_i = lambda_i
+        self.lambda_g = lambda_g
+        self.lambda_p = lambda_p
+
+    def forward(self, cover, stego, msg_in, msg_out, discriminator_logits):
+        l_i = self.mse_loss(stego, cover)
+        l_m = self.bce_with_logits(msg_out, msg_in)
+        real_labels = torch.ones_like(discriminator_logits)
+        l_g = self.bce_with_logits(discriminator_logits, real_labels)
+        
+        # Calculate Perceptual Loss across the batch
+        l_p = self.lpips_loss(stego, cover).mean()
+        
+        total_loss = (self.lambda_m * l_m) + (self.lambda_i * l_i) + (self.lambda_g * l_g) + (self.lambda_p * l_p)
+        return total_loss, l_i, l_m, l_g, l_p
+
+def calculate_ber(decoded_logits, original_message, payload_length=208):
+    flat_logits = decoded_logits.view(decoded_logits.size(0), -1)[:, :payload_length]
+    flat_original = original_message.view(original_message.size(0), -1)[:, :payload_length]
+    probabilities = torch.sigmoid(flat_logits)
+    predicted_bits = (probabilities > 0.5).float()
+    errors = (predicted_bits != flat_original).sum().item()
+    return errors / flat_original.numel()
+
+# ==========================================
+# 5. GLOBAL FEC & PAYLOAD GENERATOR
+# ==========================================
+FEC_PIPELINE = RSCodecPipeline(parity_symbols=10)
+
+def generate_spatial_payloads(batch_size, device, spatial_size=512, data_depth=8):
+    """Updated spatial_size to 512 to match high-resolution commercial images."""
+    all_bits = []
+    for _ in range(batch_size):
+        raw_uuid_bytes = uuid.uuid4().bytes
+        encoded_bytes = FEC_PIPELINE.rs.encode(raw_uuid_bytes)
+        
+        bits = []
+        for byte in encoded_bytes:
+            for i in range(7, -1, -1):
+                bits.append((byte >> i) & 1)
+
+        total_capacity = data_depth * spatial_size * spatial_size
+        padding_length = total_capacity - len(bits)
+        bits.extend([0] * padding_length)
+        
+        bits_tensor = torch.tensor(bits, dtype=torch.float32).view(data_depth, spatial_size, spatial_size)
+        all_bits.append(bits_tensor)
+        
+    return torch.stack(all_bits).to(device)
+
+
+# ==========================================
+# 6. THE HIGH-RES MASTER TRAINING LOOP
+# ==========================================
+def run_training_loop():
+    print("\n--- INITIALIZING HiDDeN HIGH-RES PRODUCTION PIPELINE ---")
+    
+    # --- RAM/CPU BOTTLENECK DEFENSE ACTIVATED ---
+    physical_batch_size = 2   # Halved to save RAM/VRAM
+    accumulation_steps = 16   # Doubled to maintain the math of a batch size of 64
+    epochs = 80         
+    lr = 1e-3
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # UPDATE THIS PATH to your folder of high-res images!
+    dataset_path = "./data/fast_patches" 
+    os.makedirs(dataset_path, exist_ok=True)
+    
+    print("Mounting High-Resolution Dataset...")
+    dataset = HighResImageFolder(dataset_path)
+    if len(dataset) == 0:
+        print(f"ERROR: Put some images in '{dataset_path}' to begin training.")
+        return
+        
+    # RAM DEFENSE: num_workers=0 stops multiprocessing RAM duplication. pin_memory=True speeds up GPU transfer.
+    train_loader = DataLoader(dataset, batch_size=physical_batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    
+    # Initialize Phase 3 Networks
+    encoder = EncoderDense(data_depth=8).to(device)
+    decoder = DecoderDense(data_depth=8).to(device)
+    discriminator = HiddenDiscriminator().to(device) 
+    
+    # Student B's new MBRS Noise Layer
+    noise_layer = AdvancedNoiseLayer().to(device)
+    criterion = HighResHiDDeNLoss(device=device, lambda_m=500.0, lambda_i=0.05, lambda_p=0.5).to(device)
+    
+    opt_enc_dec = optim.Adam(list(encoder.parameters()) + list(decoder.parameters()), lr=lr)
+    opt_disc = optim.Adam(discriminator.parameters(), lr=lr)
+    
+    print("Starting MBRS Phase 3 training...")
+    opt_disc.zero_grad()
+    opt_enc_dec.zero_grad()
+
+    best_real_ber = float('inf')
+
+    for epoch in range(epochs):
+        encoder.train()
+        decoder.train()
+
+        for i, cover_images in enumerate(train_loader):
+            cover_images = cover_images.to(device)
+            current_batch_size = cover_images.size(0)
+            
+            # Using 512x512 spatial payloads now
+            payloads = generate_spatial_payloads(current_batch_size, device, spatial_size=512)
+            
+            # --- Train Discriminator ---
+            stego_images = encoder(cover_images, payloads).detach() 
+            d_real_logits = discriminator(cover_images)
+            d_fake_logits = discriminator(stego_images)
+            
+            d_loss_real = criterion.bce_with_logits(d_real_logits, torch.ones_like(d_real_logits))
+            d_loss_fake = criterion.bce_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
+            
+            d_loss = ((d_loss_real + d_loss_fake) / 2) / accumulation_steps
+            d_loss.backward()
+            
+            if (i + 1) % accumulation_steps == 0:
+                opt_disc.step()
+                opt_disc.zero_grad()
+            
+            # --- Train Encoder/Decoder (Simulated MBRS Path) ---
+            stego_images = encoder(cover_images, payloads)
+            
+            # Flows through Student B's Kornia STE approximation
+            noisy_sim_images = noise_layer(stego_images, cover_images) 
+            decoded_sim_payloads = decoder(noisy_sim_images)
+            
+            d_fake_logits_for_gen = discriminator(stego_images)
+            
+            loss, l2_loss, msg_loss, g_loss, p_loss = criterion(
+                cover_images, stego_images, payloads, decoded_sim_payloads, d_fake_logits_for_gen
+            )
+            
+            loss = loss / accumulation_steps
+            loss.backward()
+            
+            if (i + 1) % accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(encoder.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(decoder.parameters(), 1.0)
+                opt_enc_dec.step()
+                opt_enc_dec.zero_grad()
+            
+            # ----------------------------------------------------
+            # FORENSIC VALIDATION (Real JPEG Severed Graph)
+            # ----------------------------------------------------
+            if (i+1) % 100 == 0:
+                encoder.eval()
+                decoder.eval()
+                
+                with torch.no_grad(): # Mathematically sever the graph
+                    # 1. Clean BER
+                    decoded_clean = decoder(stego_images)
+                    clean_ber = calculate_ber(decoded_clean, payloads)
+                    
+                    # 2. Sim BER
+                    sim_ber = calculate_ber(decoded_sim_payloads, payloads)
+                    
+                    # 3. Real BER (Strict Forward-Pass Evaluation)
+                    # Use Student B's static method to apply TRUE torchvision JPEG
+                    real_quality = torch.full((current_batch_size,), 50.0).to(device)
+                    real_jpeg_images = AdvancedNoiseLayer._apply_real_jpeg(stego_images, real_quality)
+                    decoded_real = decoder(real_jpeg_images)
+                    real_ber = calculate_ber(decoded_real, payloads)
+
+                print(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f}")
+                print(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
+                
+                # STRICT SAVE TRIGGER
+                if real_ber < 0.10 and real_ber < best_real_ber:
+                    best_real_ber = real_ber
+                    print(f"  🌟 [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
+                    os.makedirs("saved_models", exist_ok=True)
+                    torch.save(encoder.state_dict(), "saved_models/best_commercial_encoder.pth")
+                    torch.save(decoder.state_dict(), "saved_models/best_commercial_decoder.pth")
+                
+                encoder.train()
+                decoder.train()
+
+if __name__ == "__main__":
+    run_training_loop()
+    print("\n--- TRAINING COMPLETE ---")
