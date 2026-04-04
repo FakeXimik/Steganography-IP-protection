@@ -114,8 +114,13 @@ def calculate_ber(decoded_logits, original_message, payload_length=208):
 FEC_PIPELINE = RSCodecPipeline(parity_symbols=10)
 
 def generate_spatial_payloads(batch_size, device, spatial_size=512, data_depth=8):
-    """Updated spatial_size to 512 to match high-resolution commercial images."""
+    """
+    UPDATED: Uses Spatial Broadcasting (Repeating) instead of Zero-Padding
+    to prevent the AI from collapsing to an all-zero prediction.
+    """
     all_bits = []
+    total_capacity = data_depth * spatial_size * spatial_size
+    
     for _ in range(batch_size):
         raw_uuid_bytes = uuid.uuid4().bytes
         encoded_bytes = FEC_PIPELINE.rs.encode(raw_uuid_bytes)
@@ -125,11 +130,15 @@ def generate_spatial_payloads(batch_size, device, spatial_size=512, data_depth=8
             for i in range(7, -1, -1):
                 bits.append((byte >> i) & 1)
 
-        total_capacity = data_depth * spatial_size * spatial_size
-        padding_length = total_capacity - len(bits)
-        bits.extend([0] * padding_length)
+        # Convert to tensor
+        bits_tensor = torch.tensor(bits, dtype=torch.float32)
         
-        bits_tensor = torch.tensor(bits, dtype=torch.float32).view(data_depth, spatial_size, spatial_size)
+        # Tile/Repeat the message until it fills the massive high-res capacity
+        repeats = (total_capacity // len(bits_tensor)) + 1
+        bits_tensor = bits_tensor.repeat(repeats)[:total_capacity]
+        
+        # Reshape to match the image dimensions
+        bits_tensor = bits_tensor.view(data_depth, spatial_size, spatial_size)
         all_bits.append(bits_tensor)
         
     return torch.stack(all_bits).to(device)
