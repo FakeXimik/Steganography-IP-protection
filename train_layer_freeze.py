@@ -124,10 +124,10 @@ def build_and_freeze_phase3_models(device):
     # ==========================================
     print("Executing Hybrid Layer Freeze to protect VRAM...")
     
-    # ENCODER: FROZEN
-    for param in encoder.conv1.parameters(): param.requires_grad = False
-    for param in encoder.conv2.parameters(): param.requires_grad = False
-    for param in encoder.conv3.parameters(): param.requires_grad = False
+    # # ENCODER: FROZEN
+    # for param in encoder.conv1.parameters(): param.requires_grad = False
+    # for param in encoder.conv2.parameters(): param.requires_grad = False
+    # for param in encoder.conv3.parameters(): param.requires_grad = False
     
     # DECODER: UNFROZEN.
 
@@ -138,7 +138,11 @@ def build_and_freeze_phase3_models(device):
     
     print(f"[Encoder] Frozen: {enc_frozen:,} | Active: {enc_active:,} (VRAM Protected)")
     print(f"[Decoder] Frozen: {dec_frozen:,} | Active: {dec_active:,} (Fully Active)")
+    enc_active = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+    dec_active = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
     
+    print(f"[Encoder] Fully Active: {enc_active:,} parameters")
+    print(f"[Decoder] Fully Active: {dec_active:,} parameters")
     return encoder, decoder
 
 # ==========================================
@@ -186,7 +190,14 @@ def run_training_loop():
         if epoch == 10:
             print("\n[SYSTEM] Increasing Image Fidelity Constraint (lambda_i -> 0.7)")
             criterion.lambda_i = 0.7
-            
+        if epoch == 15:
+            print("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
+            for param in encoder.parameters(): 
+                param.requires_grad = False
+                
+            # We must update the optimizer so it stops trying to train the frozen layers!
+            active_params = [p for p in decoder.parameters() if p.requires_grad]
+            opt_enc_dec = optim.Adam(active_params, lr=lr)    
         encoder.train()
         decoder.train()
 
