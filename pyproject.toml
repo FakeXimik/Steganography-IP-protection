@@ -21,7 +21,7 @@ dependencies = [
     "torch==2.10.0",
     "torchvision==0.25.0",
     "kornia==0.8.2",
-    "steganogan==0.1.2" # REMOVE LATER - used for downloading pretrained weights
+    "steganogan==0.1.2", # REMOVE LATER - used for downloading pretrained weights
     "lpips==0.1.4",
     "Pillow==10.2.0"
 ]
