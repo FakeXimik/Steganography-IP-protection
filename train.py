@@ -341,13 +341,6 @@ def run_training_loop():
                     else:
                         real_ber = clean_ber # Default to clean BER during warmup
 
-            # Save checkpoints
-            if (epoch + 1) % 10 == 0:
-                os.makedirs("saved_models", exist_ok=True)
-                torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
-                torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
-                logger.info(f"--> Checkpoint saved for Epoch {epoch+1}")
-
                 noise_status = "ON" if epoch > 1 else "OFF (Warm-up)"
                 logger.info(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f} | Noise: {noise_status}")
                 logger.info(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
@@ -361,6 +354,12 @@ def run_training_loop():
                 
                 encoder.train()
                 decoder.train()
+
+        if (epoch + 1) % 10 == 0:
+            os.makedirs("saved_models", exist_ok=True)
+            torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
+            torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
+            logger.info(f"--> Checkpoint saved for Epoch {epoch+1}")
 
 if __name__ == "__main__":
     try:
