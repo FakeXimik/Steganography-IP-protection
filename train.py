@@ -1,4 +1,6 @@
 import os
+import logging
+from datetime import datetime
 import uuid
 import torch
 import torch.nn as nn
@@ -15,6 +17,27 @@ from models.encoder_dense import EncoderDense
 from models.decoder_dense import DecoderDense
 from models.noise import AdvancedNoiseLayer
 from utils.fec import RSCodecPipeline
+
+# ==========================================
+# LOGGING
+# ==========================================
+
+os.makedirs("logs", exist_ok=True)
+
+log_filename = datetime.now().strftime("logs/training_%Y-%m-%d_%H-%M-%S.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.FileHandler(log_filename),  # Writes to the file
+        logging.StreamHandler()             # Prints to the console
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+logger.info("--- TRAINING SCRIPT STARTED ---")
 
 # ==========================================
 # HIGH-RESOLUTION DATA PIPELINE
@@ -155,20 +178,20 @@ def generate_spatial_payloads(batch_size, device, spatial_size=512, data_depth=8
 # INITIALIZATION & LAYER FREEZE
 # ==========================================
 def build_and_freeze_phase3_models(device):
-    print("\n--- INITIATING PHASE 3: HYBRID VRAM DEFENSE ---")
+    logger.info("\n--- INITIATING PHASE 3: HYBRID VRAM DEFENSE ---")
     data_depth = 8 
     
     encoder = EncoderDense(data_depth=data_depth).to(device)
     decoder = DecoderDense(data_depth=data_depth).to(device)
     
-    print("Loading pre-trained Dense weights from /weights/...")
+    logger.info("Loading pre-trained Dense weights from /weights/...")
     encoder_path = os.path.join('weights', 'encoder_dense_pretrained.pth')
     decoder_path = os.path.join('weights', 'decoder_dense_pretrained.pth')
     
     encoder.load_state_dict(torch.load(encoder_path, weights_only=False))
     decoder.load_state_dict(torch.load(decoder_path, weights_only=False), strict=False)
        
-    print("Executing Hybrid Layer Freeze to protect VRAM on 512x512 images...")
+    logger.info("Executing Hybrid Layer Freeze to protect VRAM on 512x512 images...")
     
     # ENCODER: Freeze early massive layers.
     for param in encoder.conv1.parameters(): param.requires_grad = False
@@ -182,8 +205,8 @@ def build_and_freeze_phase3_models(device):
     dec_frozen = sum(p.numel() for p in decoder.parameters() if not p.requires_grad)
     dec_active = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
     
-    print(f"[Encoder] Frozen: {enc_frozen:,} | Active: {enc_active:,} (VRAM Protected)")
-    print(f"[Decoder] Frozen: {dec_frozen:,} | Active: {dec_active:,} (Fully Active)")
+    logger.info(f"[Encoder] Frozen: {enc_frozen:,} | Active: {enc_active:,} (VRAM Protected)")
+    logger.info (f"[Decoder] Frozen: {dec_frozen:,} | Active: {dec_active:,} (Fully Active)")
     
     return encoder, decoder
 
@@ -191,7 +214,7 @@ def build_and_freeze_phase3_models(device):
 # MASTER TRAINING LOOP
 # ==========================================
 def run_training_loop():
-    print("\n--- INITIALIZING HiDDeN HIGH-RES PRODUCTION PIPELINE ---")
+    logger.info("\n--- INITIALIZING HiDDeN HIGH-RES PRODUCTION PIPELINE ---")
     
     physical_batch_size = 2   
     accumulation_steps = 16   
@@ -202,10 +225,10 @@ def run_training_loop():
     dataset_path = "./data/fast_patches" 
     os.makedirs(dataset_path, exist_ok=True)
     
-    print("Mounting High-Resolution Dataset...")
+    logger.info("Mounting High-Resolution Dataset...")
     dataset = HighResImageFolder(dataset_path)
     if len(dataset) == 0:
-        print(f"ERROR: Put some images in '{dataset_path}' to begin training.")
+        logger.info(f"ERROR: Put some images in '{dataset_path}' to begin training.")
         return
         
     train_loader = DataLoader(dataset, batch_size=physical_batch_size, shuffle=True, num_workers=0, pin_memory=True)
@@ -223,7 +246,7 @@ def run_training_loop():
     opt_enc_dec = optim.Adam(active_params, lr=lr)
     opt_disc = optim.Adam(discriminator.parameters(), lr=lr)
     
-    print("Starting MBRS Phase 3 training...")
+    logger.info("Starting MBRS Phase 3 training...")
     opt_disc.zero_grad()
     opt_enc_dec.zero_grad()
 
@@ -235,11 +258,11 @@ def run_training_loop():
         #  CURRICULUM LEARNING
         # ==========================================
         if epoch == 2:
-            print("\n[SYSTEM] Increasing Image Fidelity Constraint (lambda_i -> 0.15)")
+            logger.info("\n[SYSTEM] Increasing Image Fidelity Constraint (lambda_i -> 0.25)")
             criterion.lambda_i = 0.25
             
         if epoch == 5:
-            print("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
+            logger.info("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
             for param in encoder.parameters(): 
                 param.requires_grad = False
                 
@@ -268,14 +291,14 @@ def run_training_loop():
             d_loss = ((d_loss_real + d_loss_fake) / 2) / accumulation_steps
             d_loss.backward()
             
-            if (i + 1) % accumulation_steps == 0:
+            if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
                 opt_disc.step()
                 opt_disc.zero_grad()
             
             # --- Train Encoder/Decoder ---
             stego_images = encoder(cover_images, payloads)
             
-            #  NOISE WARM-UP
+            #  NOISE WARM-UP    
             if epoch > 1:
                 noisy_sim_images = noise_layer(stego_images, cover_images) 
             else:
@@ -302,14 +325,14 @@ def run_training_loop():
                 decoder.eval()
                 
                 with torch.no_grad(): 
-                    # 1. Clean BER
+                    # Clean BER
                     decoded_clean = decoder(stego_images)
                     clean_ber = calculate_ber(decoded_clean, payloads)
                     
-                    # 2. Sim BER
+                    # Sim BER
                     sim_ber = calculate_ber(decoded_sim_payloads, payloads)
                     
-                    # 3. Real BER (Only apply Real JPEG if we are past the noise warm-up!)
+                    # Real BER (Only apply Real JPEG if we are past the noise warm-up!)
                     if epoch > 1:
                         real_quality = torch.full((current_batch_size,), 50.0).to(device)
                         real_jpeg_images = AdvancedNoiseLayer._apply_real_jpeg(stego_images, real_quality)
@@ -318,13 +341,20 @@ def run_training_loop():
                     else:
                         real_ber = clean_ber # Default to clean BER during warmup
 
+            # Save checkpoints
+            if (epoch + 1) % 10 == 0:
+                os.makedirs("saved_models", exist_ok=True)
+                torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
+                torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
+                logger.info(f"--> Checkpoint saved for Epoch {epoch+1}")
+
                 noise_status = "ON" if epoch > 1 else "OFF (Warm-up)"
-                print(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f} | Noise: {noise_status}")
-                print(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
+                logger.info(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f} | Noise: {noise_status}")
+                logger.info(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
                 
                 if epoch > 1 and real_ber < 0.10 and real_ber < best_real_ber:
                     best_real_ber = real_ber
-                    print(f"  🌟 [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
+                    logger.info(f"  🌟 [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
                     os.makedirs("saved_models", exist_ok=True)
                     torch.save(encoder.state_dict(), "saved_models/best_commercial_encoder.pth")
                     torch.save(decoder.state_dict(), "saved_models/best_commercial_decoder.pth")
@@ -333,5 +363,9 @@ def run_training_loop():
                 decoder.train()
 
 if __name__ == "__main__":
-    run_training_loop()
-    print("\n--- TRAINING COMPLETE ---")
+    try:
+        run_training_loop()
+        logger.info("\n--- TRAINING COMPLETE ---")
+        
+    except Exception as e:
+        logger.error("A FATAL ERROR OCCURRED DURING TRAINING!", exc_info=True)
