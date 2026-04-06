@@ -216,9 +216,9 @@ def build_and_freeze_phase3_models(device):
 def run_training_loop():
     logger.info("\n--- INITIALIZING HiDDeN HIGH-RES PRODUCTION PIPELINE ---")
     
-    physical_batch_size = 2   
-    accumulation_steps = 16   
-    epochs = 80         
+    physical_batch_size = 4   
+    accumulation_steps = 8  
+    epochs = 10         
     lr = 1e-3
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -238,7 +238,7 @@ def run_training_loop():
     
     noise_layer = AdvancedNoiseLayer().to(device)
     # Starting with a low image penalty (0.05) so the network focuses on surviving the noise
-    criterion = HighResHiDDeNLoss(device=device, lambda_m=500.0, lambda_i=0.05, lambda_p=0.5).to(device)
+    criterion = HighResHiDDeNLoss(device=device, lambda_m=500.0, lambda_i=0.3, lambda_p=0.5).to(device)
     
     active_params = [p for p in encoder.parameters() if p.requires_grad] + \
                     [p for p in decoder.parameters() if p.requires_grad]
@@ -257,16 +257,23 @@ def run_training_loop():
         # ==========================================
         #  CURRICULUM LEARNING
         # ==========================================
-        if epoch == 2:
-            logger.info("\n[SYSTEM] Increasing Image Fidelity Constraint (lambda_i -> 0.25)")
-            criterion.lambda_i = 0.25
+# ==========================================
+        # Epoch 0-1: Noise is OFF.
+        # Epoch 1-3: Noise turns ON 
+        
+        if epoch == 4:
+            logger.info("\n[SYSTEM] Stage 1 Cleanup: Increasing Image Fidelity (lambda_i -> 0.3)")
+            criterion.lambda_i = 0.3
             
-        if epoch == 5:
+        if epoch == 6:
+            logger.info("\n[SYSTEM] Stage 2 Cleanup: Strict Image Fidelity (lambda_i -> 0.6)")
+            criterion.lambda_i = 0.6
+                
+        if epoch == 8: 
             logger.info("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
             for param in encoder.parameters(): 
                 param.requires_grad = False
-                
-            # Update optimizer to only train the Decoder from this point forward
+            
             active_params = [p for p in decoder.parameters() if p.requires_grad]
             opt_enc_dec = optim.Adam(active_params, lr=lr)    
         # ==========================================
@@ -280,43 +287,55 @@ def run_training_loop():
             
             payloads = generate_spatial_payloads(current_batch_size, device, spatial_size=512)
             
-            # --- Train Discriminator ---
-            stego_images = encoder(cover_images, payloads).detach() 
-            d_real_logits = discriminator(cover_images)
-            d_fake_logits = discriminator(stego_images)
-            
-            d_loss_real = criterion.bce_with_logits(d_real_logits, torch.ones_like(d_real_logits))
-            d_loss_fake = criterion.bce_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
-            
-            d_loss = ((d_loss_real + d_loss_fake) / 2) / accumulation_steps
-            d_loss.backward()
+            # ------------------------------------------
+            # Train Discriminator 
+            # ------------------------------------------
+            with torch.autocast(device_type='cuda'):
+                stego_images = encoder(cover_images, payloads).detach() 
+                d_real_logits = discriminator(cover_images)
+                d_fake_logits = discriminator(stego_images)
+                
+                d_loss_real = criterion.bce_with_logits(d_real_logits, torch.ones_like(d_real_logits))
+                d_loss_fake = criterion.bce_with_logits(d_fake_logits, torch.zeros_like(d_fake_logits))
+                
+                d_loss = ((d_loss_real + d_loss_fake) / 2) / accumulation_steps
+                
+            scaler.scale(d_loss).backward()
             
             if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
-                opt_disc.step()
+                scaler.unscale_(opt_disc)
+                torch.nn.utils.clip_grad_norm_(discriminator.parameters(), 1.0) # The Savior
+                scaler.step(opt_disc)
                 opt_disc.zero_grad()
+                # Do NOT call scaler.update() yet!
             
-            # --- Train Encoder/Decoder ---
-            stego_images = encoder(cover_images, payloads)
-            
-            #  NOISE WARM-UP    
-            if epoch > 1:
-                noisy_sim_images = noise_layer(stego_images, cover_images) 
-            else:
-                noisy_sim_images = stego_images
+            # ------------------------------------------
+            # Train Encoder/Decoder 
+            # ------------------------------------------
+            with torch.autocast(device_type='cuda'):
+                stego_images = encoder(cover_images, payloads)
                 
-            decoded_sim_payloads = decoder(noisy_sim_images)
-            d_fake_logits_for_gen = discriminator(stego_images)
+                if epoch > 1:
+                    noisy_sim_images = noise_layer(stego_images, cover_images) 
+                else:
+                    noisy_sim_images = stego_images
+                    
+                decoded_sim_payloads = decoder(noisy_sim_images)
+                d_fake_logits_for_gen = discriminator(stego_images)
+                
+                loss, l2_loss, msg_loss, g_loss, p_loss = criterion(
+                    cover_images, stego_images, payloads, decoded_sim_payloads, d_fake_logits_for_gen
+                )
+                loss = loss / accumulation_steps
+
+            scaler.scale(loss).backward()
             
-            loss, l2_loss, msg_loss, g_loss, p_loss = criterion(
-                cover_images, stego_images, payloads, decoded_sim_payloads, d_fake_logits_for_gen
-            )
-            
-            loss = loss / accumulation_steps
-            loss.backward()
-            
-            if (i + 1) % accumulation_steps == 0:
+            if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
+                scaler.unscale_(opt_enc_dec)
                 torch.nn.utils.clip_grad_norm_(active_params, 1.0)
-                opt_enc_dec.step()
+                scaler.step(opt_enc_dec)
+                
+                scaler.update()
                 opt_enc_dec.zero_grad()
             
             # --- FORENSIC VALIDATION ---
@@ -333,7 +352,7 @@ def run_training_loop():
                     sim_ber = calculate_ber(decoded_sim_payloads, payloads)
                     
                     # Real BER (Only apply Real JPEG if we are past the noise warm-up!)
-                    if epoch > 1:
+                    if epoch > 0:
                         real_quality = torch.full((current_batch_size,), 50.0).to(device)
                         real_jpeg_images = AdvancedNoiseLayer._apply_real_jpeg(stego_images, real_quality)
                         decoded_real = decoder(real_jpeg_images)
@@ -341,7 +360,7 @@ def run_training_loop():
                     else:
                         real_ber = clean_ber # Default to clean BER during warmup
 
-                noise_status = "ON" if epoch > 1 else "OFF (Warm-up)"
+                noise_status = "ON" if epoch > 0 else "OFF "
                 logger.info(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f} | Noise: {noise_status}")
                 logger.info(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
                 
@@ -355,7 +374,7 @@ def run_training_loop():
                 encoder.train()
                 decoder.train()
 
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 2 == 0:
             os.makedirs("saved_models", exist_ok=True)
             torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
             torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
@@ -363,6 +382,7 @@ def run_training_loop():
 
 if __name__ == "__main__":
     try:
+        scaler = torch.amp.GradScaler('cuda')
         run_training_loop()
         logger.info("\n--- TRAINING COMPLETE ---")
         
