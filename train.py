@@ -22,22 +22,7 @@ from utils.fec import RSCodecPipeline
 # LOGGING
 # ==========================================
 
-os.makedirs("logs", exist_ok=True)
-
-log_filename = datetime.now().strftime("logs/training_%Y-%m-%d_%H-%M-%S.log")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.FileHandler(log_filename),  # Writes to the file
-        logging.StreamHandler()             # Prints to the console
-    ]
-)
-
 logger = logging.getLogger(__name__)
-
-logger.info("--- TRAINING SCRIPT STARTED ---")
 
 # ==========================================
 # HIGH-RESOLUTION DATA PIPELINE
@@ -177,19 +162,33 @@ def generate_spatial_payloads(batch_size, device, spatial_size=512, data_depth=8
 # ==========================================
 # INITIALIZATION & LAYER FREEZE
 # ==========================================
-def build_and_freeze_phase3_models(device):
+def build_and_freeze_phase3_models(device, resume_epoch=0):
     logger.info("\n--- INITIATING PHASE 3: HYBRID VRAM DEFENSE ---")
     data_depth = 8 
     
     encoder = EncoderDense(data_depth=data_depth).to(device)
     decoder = DecoderDense(data_depth=data_depth).to(device)
     
-    logger.info("Loading pre-trained Dense weights from /weights/...")
-    encoder_path = os.path.join('weights', 'encoder_dense_pretrained.pth')
-    decoder_path = os.path.join('weights', 'decoder_dense_pretrained.pth')
-    
-    encoder.load_state_dict(torch.load(encoder_path, weights_only=False))
-    decoder.load_state_dict(torch.load(decoder_path, weights_only=False), strict=False)
+    if resume_epoch > 0:
+        logger.info(f"Attempting to resume from Epoch {resume_epoch} checkpoints...")
+        encoder_path = os.path.join('saved_models', f'encoder_epoch_{resume_epoch}.pth')
+        decoder_path = os.path.join('saved_models', f'decoder_epoch_{resume_epoch}.pth')
+        
+        if os.path.exists(encoder_path) and os.path.exists(decoder_path):
+            encoder.load_state_dict(torch.load(encoder_path, weights_only=False))
+            decoder.load_state_dict(torch.load(decoder_path, weights_only=False))
+            logger.info(" Resumed successfully from saved checkpoints.")
+        else:
+            logger.error(f"Checkpoints for Epoch {resume_epoch} not found! Falling back to fresh start.")
+            resume_epoch = 0 # Force a fresh start
+
+    if resume_epoch == 0:
+        logger.info("Loading base pre-trained Dense weights from /weights/...")
+        encoder_path = os.path.join('weights', 'encoder_dense_pretrained.pth')
+        decoder_path = os.path.join('weights', 'decoder_dense_pretrained.pth')
+        
+        encoder.load_state_dict(torch.load(encoder_path, weights_only=False))
+        decoder.load_state_dict(torch.load(decoder_path, weights_only=False), strict=False)
        
     logger.info("Executing Hybrid Layer Freeze to protect VRAM on 512x512 images...")
     
@@ -198,8 +197,6 @@ def build_and_freeze_phase3_models(device):
     for param in encoder.conv2.parameters(): param.requires_grad = False
     for param in encoder.conv3.parameters(): param.requires_grad = False
     
-    # DECODER: Fully Active to learn the noise.
-
     enc_frozen = sum(p.numel() for p in encoder.parameters() if not p.requires_grad)
     enc_active = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
     dec_frozen = sum(p.numel() for p in decoder.parameters() if not p.requires_grad)
@@ -208,12 +205,12 @@ def build_and_freeze_phase3_models(device):
     logger.info(f"[Encoder] Frozen: {enc_frozen:,} | Active: {enc_active:,} (VRAM Protected)")
     logger.info (f"[Decoder] Frozen: {dec_frozen:,} | Active: {dec_active:,} (Fully Active)")
     
-    return encoder, decoder
+    return encoder, decoder, resume_epoch
 
 # ==========================================
 # MASTER TRAINING LOOP
 # ==========================================
-def run_training_loop():
+def run_training_loop(resume_epoch=0):
     logger.info("\n--- INITIALIZING HiDDeN HIGH-RES PRODUCTION PIPELINE ---")
     
     physical_batch_size = 4   
@@ -231,43 +228,52 @@ def run_training_loop():
         logger.info(f"ERROR: Put some images in '{dataset_path}' to begin training.")
         return
         
-    train_loader = DataLoader(dataset, batch_size=physical_batch_size, shuffle=True, num_workers=0, pin_memory=True)
+    train_loader = DataLoader(dataset, batch_size=physical_batch_size, shuffle=True, num_workers=4, pin_memory=True)
     
-    encoder, decoder = build_and_freeze_phase3_models(device)
+    encoder, decoder, resume_epoch = build_and_freeze_phase3_models(device, resume_epoch)
     discriminator = HiddenDiscriminator().to(device) 
     
     noise_layer = AdvancedNoiseLayer().to(device)
-    # Starting with a low image penalty (0.05) so the network focuses on surviving the noise
     criterion = HighResHiDDeNLoss(device=device, lambda_m=500.0, lambda_i=0.3, lambda_p=0.5).to(device)
     
+    if resume_epoch >= 4:
+        criterion.lambda_i = 0.3
+    if resume_epoch >= 6:
+        criterion.lambda_i = 0.6
+    if resume_epoch >= 8:
+        logger.info("[SYSTEM] Fast-Forwarding: Executing Mid-Flight Layer Freeze on Encoder...")
+        for param in encoder.parameters(): 
+            param.requires_grad = False
+
     active_params = [p for p in encoder.parameters() if p.requires_grad] + \
                     [p for p in decoder.parameters() if p.requires_grad]
                     
     opt_enc_dec = optim.Adam(active_params, lr=lr)
     opt_disc = optim.Adam(discriminator.parameters(), lr=lr)
+
+    scaler = torch.amp.GradScaler('cuda')
     
-    logger.info("Starting MBRS Phase 3 training...")
+    logger.info(f"Starting MBRS Phase 3 training from Epoch {resume_epoch}...")
     opt_disc.zero_grad()
     opt_enc_dec.zero_grad()
 
     best_real_ber = float('inf')
 
-    for epoch in range(epochs):
+    for epoch in range(resume_epoch, epochs):
         
         # ==========================================
         #  CURRICULUM LEARNING
         # ==========================================
-# ==========================================
         # Epoch 0-1: Noise is OFF.
         # Epoch 1-3: Noise turns ON 
         
         if epoch == 4:
             logger.info("\n[SYSTEM] Stage 1 Cleanup: Increasing Image Fidelity (lambda_i -> 0.3)")
-            criterion.lambda_i = 0.3
+            criterion.lambda_i = 0.5
             
         if epoch == 6:
             logger.info("\n[SYSTEM] Stage 2 Cleanup: Strict Image Fidelity (lambda_i -> 0.6)")
-            criterion.lambda_i = 0.6
+            criterion.lambda_i = 0.75
                 
         if epoch == 8: 
             logger.info("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
@@ -315,8 +321,12 @@ def run_training_loop():
             with torch.autocast(device_type='cuda'):
                 stego_images = encoder(cover_images, payloads)
                 
-                if epoch > 1:
-                    noisy_sim_images = noise_layer(stego_images, cover_images) 
+                if epoch > 0:
+                    # 20% of the time, feed the Decoder a clean image so it doesn't forget!
+                    if torch.rand(1).item() < 0.2:
+                        noisy_sim_images = stego_images
+                    else:
+                        noisy_sim_images = noise_layer(stego_images, cover_images) 
                 else:
                     noisy_sim_images = stego_images
                     
@@ -366,7 +376,7 @@ def run_training_loop():
                 
                 if epoch > 1 and real_ber < 0.10 and real_ber < best_real_ber:
                     best_real_ber = real_ber
-                    logger.info(f"  🌟 [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
+                    logger.info(f"   [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
                     os.makedirs("saved_models", exist_ok=True)
                     torch.save(encoder.state_dict(), "saved_models/best_commercial_encoder.pth")
                     torch.save(decoder.state_dict(), "saved_models/best_commercial_decoder.pth")
@@ -374,16 +384,51 @@ def run_training_loop():
                 encoder.train()
                 decoder.train()
 
-        if (epoch + 1) % 2 == 0:
+        if (epoch + 1) % 1 == 0:
             os.makedirs("saved_models", exist_ok=True)
             torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
             torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
             logger.info(f"--> Checkpoint saved for Epoch {epoch+1}")
 
 if __name__ == "__main__":
+
+    os.makedirs("logs", exist_ok=True)
+
+    log_filename = datetime.now().strftime("logs/training_%Y-%m-%d_%H-%M-%S.log")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[
+            logging.FileHandler(log_filename),  
+            logging.StreamHandler()             
+        ]
+    )
+
+    logger = logging.getLogger(__name__)
+
+    logger.info("--- TRAINING SCRIPT STARTED ---")
+
+    print("\n" + "="*50)
+    print("  HiDDeN HIGH-RES TRAINING PROTOCOL")
+    print("="*50)
+    print("1. Start a fresh training process (Loads Base Weights)")
+    print("2. Resume from a saved checkpoint")
+    print("="*50)
+    
+    choice = input("\nEnter your choice (1 or 2): ").strip()
+    resume_epoch = 0
+    
+    if choice == '2':
+        epoch_input = input("Enter the exact epoch number you want to resume from (e.g., 2, 4, 8): ").strip()
+        try:
+            resume_epoch = int(epoch_input)
+        except ValueError:
+            print("Invalid input! Falling back to a fresh start.")
+            resume_epoch = 0
+
     try:
-        scaler = torch.amp.GradScaler('cuda')
-        run_training_loop()
+        run_training_loop(resume_epoch=resume_epoch)
         logger.info("\n--- TRAINING COMPLETE ---")
         
     except Exception as e:
