@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from datetime import datetime
 import uuid
 import torch
@@ -352,6 +353,8 @@ def run_training_loop(resume_epoch=0):
             if (i + 1) % 100 == 0 or (i + 1) == len(train_loader):
                 encoder.eval()
                 decoder.eval()
+
+                time.sleep(0.1)
                 
                 with torch.no_grad(): 
                     # Clean BER
