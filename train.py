@@ -218,6 +218,9 @@ def run_training_loop(resume_epoch=0):
     accumulation_steps = 8  
     epochs = 10         
     lr = 1e-3
+    if resume_epoch >= 8:
+        logger.info("\n[SYSTEM] Late-stage resume detected. Dropping Learning Rate to 1e-4.")
+        lr = 1e-4  # Slow down for final fine-tuning
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     dataset_path = "./data/fast_patches" 
@@ -236,15 +239,6 @@ def run_training_loop(resume_epoch=0):
     
     noise_layer = AdvancedNoiseLayer().to(device)
     criterion = HighResHiDDeNLoss(device=device, lambda_m=500.0, lambda_i=0.3, lambda_p=0.5).to(device)
-    
-    if resume_epoch >= 4:
-        criterion.lambda_i = 0.3
-    if resume_epoch >= 6:
-        criterion.lambda_i = 0.6
-    if resume_epoch >= 8:
-        logger.info("[SYSTEM] Fast-Forwarding: Executing Mid-Flight Layer Freeze on Encoder...")
-        for param in encoder.parameters(): 
-            param.requires_grad = False
 
     active_params = [p for p in encoder.parameters() if p.requires_grad] + \
                     [p for p in decoder.parameters() if p.requires_grad]
@@ -268,21 +262,19 @@ def run_training_loop(resume_epoch=0):
         # Epoch 0-1: Noise is OFF.
         # Epoch 1-3: Noise turns ON 
         
-        if epoch == 4:
-            logger.info("\n[SYSTEM] Stage 1 Cleanup: Increasing Image Fidelity (lambda_i -> 0.3)")
-            criterion.lambda_i = 0.5
-            
-        if epoch == 6:
-            logger.info("\n[SYSTEM] Stage 2 Cleanup: Strict Image Fidelity (lambda_i -> 0.6)")
-            criterion.lambda_i = 0.75
+        new_lambda_i = min(10.0 + (epoch * 15.0), 50.0)
+        new_lambda_p = min(5.0 + (epoch * 10.0), 30.0)
+        
+        if criterion.lambda_i != new_lambda_i:
+            logger.info(f"\n[SYSTEM] Curriculum Learning: Image Fidelity (lambda_i -> {new_lambda_i:.1f}) | Perceptual (lambda_p -> {new_lambda_p:.1f})")
+            criterion.lambda_i = new_lambda_i
+            criterion.lambda_p = new_lambda_p
                 
-        if epoch == 8: 
-            logger.info("\n[SYSTEM] Executing Mid-Flight Layer Freeze on Encoder...")
-            for param in encoder.parameters(): 
-                param.requires_grad = False
+        if epoch == 8 and resume_epoch < 8: 
+            logger.info("\n[SYSTEM] Dropping Learning Rate to 1e-4 for Joint Fine-Tuning...")
+            for param_group in opt_enc_dec.param_groups:
+                param_group['lr'] = 1e-4
             
-            active_params = [p for p in decoder.parameters() if p.requires_grad]
-            opt_enc_dec = optim.Adam(active_params, lr=lr)    
         # ==========================================
 
         encoder.train()
@@ -354,7 +346,6 @@ def run_training_loop(resume_epoch=0):
                 encoder.eval()
                 decoder.eval()
 
-                time.sleep(0.1)
                 
                 with torch.no_grad(): 
                     # Clean BER
