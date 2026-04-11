@@ -172,8 +172,8 @@ def build_and_freeze_phase3_models(device, resume_epoch=0):
     
     if resume_epoch > 0:
         logger.info(f"Attempting to resume from Epoch {resume_epoch} checkpoints...")
-        encoder_path = os.path.join('saved_models', f'encoder_epoch_{resume_epoch}.pth')
-        decoder_path = os.path.join('saved_models', f'decoder_epoch_{resume_epoch}.pth')
+        encoder_path = os.path.join('saved_models/checkpoints', f'encoder_epoch_{resume_epoch}.pth')
+        decoder_path = os.path.join('saved_models/checkpoints', f'decoder_epoch_{resume_epoch}.pth')
         
         if os.path.exists(encoder_path) and os.path.exists(decoder_path):
             encoder.load_state_dict(torch.load(encoder_path, weights_only=False))
@@ -216,7 +216,7 @@ def run_training_loop(resume_epoch=0):
     
     physical_batch_size = 4   
     accumulation_steps = 8  
-    epochs = 10         
+    epochs = 12         
     lr = 1e-3
     if resume_epoch >= 8:
         logger.info("\n[SYSTEM] Late-stage resume detected. Dropping Learning Rate to 1e-4.")
@@ -252,7 +252,7 @@ def run_training_loop(resume_epoch=0):
     opt_disc.zero_grad()
     opt_enc_dec.zero_grad()
 
-    best_real_ber = float('inf')
+    best_score = float('inf')
 
     for epoch in range(resume_epoch, epochs):
         
@@ -262,8 +262,8 @@ def run_training_loop(resume_epoch=0):
         # Epoch 0-1: Noise is OFF.
         # Epoch 1-3: Noise turns ON 
         
-        new_lambda_i = min(10.0 + (epoch * 15.0), 50.0)
-        new_lambda_p = min(5.0 + (epoch * 10.0), 30.0)
+        new_lambda_i = min(10.0 + (epoch * 15.0), 65.0)
+        new_lambda_p = min(5.0 + (epoch * 10.0), 45.0)
         
         if criterion.lambda_i != new_lambda_i:
             logger.info(f"\n[SYSTEM] Curriculum Learning: Image Fidelity (lambda_i -> {new_lambda_i:.1f}) | Perceptual (lambda_p -> {new_lambda_p:.1f})")
@@ -364,24 +364,29 @@ def run_training_loop(resume_epoch=0):
                     else:
                         real_ber = clean_ber # Default to clean BER during warmup
 
+                time.sleep(0.1)
+
                 noise_status = "ON" if epoch > 0 else "OFF "
                 logger.info(f"Epoch [{epoch+1}/{epochs}] Step [{i+1}] | Loss: {loss.item() * accumulation_steps:.4f} | LPIPS: {p_loss.item():.4f} | Noise: {noise_status}")
                 logger.info(f"  -> BER | Clean: {clean_ber:.2%} | Simulated: {sim_ber:.2%} | REAL: {real_ber:.2%}")
                 
-                if epoch > 1 and real_ber < 0.10 and real_ber < best_real_ber:
-                    best_real_ber = real_ber
-                    logger.info(f"   [SUCCESS] New Best Real BER ({real_ber:.2%}). Saving Commercial Model...")
+                score = real_ber + (p_loss.item() * 0.5)
+                
+                # We only consider models with a BER under 15% (easily fixed by FEC)
+                if epoch > 1 and real_ber < 0.15 and score < best_score:
+                    best_score = score
+                    logger.info(f"   [SUCCESS] New Best Model! (Score: {score:.4f} | BER: {real_ber:.2%} | LPIPS: {p_loss.item():.4f})")
                     os.makedirs("saved_models", exist_ok=True)
-                    torch.save(encoder.state_dict(), "saved_models/best_commercial_encoder.pth")
-                    torch.save(decoder.state_dict(), "saved_models/best_commercial_decoder.pth")
+                    torch.save(encoder.state_dict(), "saved_models/checkpoints/best_encoder.pth")
+                    torch.save(decoder.state_dict(), "saved_models/checkpoints/best_decoder.pth")
                 
                 encoder.train()
                 decoder.train()
 
         if (epoch + 1) % 1 == 0:
             os.makedirs("saved_models", exist_ok=True)
-            torch.save(encoder.state_dict(), f"saved_models/encoder_epoch_{epoch+1}.pth")
-            torch.save(decoder.state_dict(), f"saved_models/decoder_epoch_{epoch+1}.pth")
+            torch.save(encoder.state_dict(), f"saved_models/checkpoints/encoder_epoch_{epoch+1}.pth")
+            torch.save(decoder.state_dict(), f"saved_models/checkpoints/decoder_epoch_{epoch+1}.pth")
             logger.info(f"--> Checkpoint saved for Epoch {epoch+1}")
 
 if __name__ == "__main__":
