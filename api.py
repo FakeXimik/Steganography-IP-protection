@@ -38,7 +38,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Secret-UUID"]  #  Allows frontend to read your custom header!
+    expose_headers=["Secret-UUID"]  #  Allows frontend to read your custom header
 )
 
 @app.post("/embed", summary="Upload an image to hide data")
