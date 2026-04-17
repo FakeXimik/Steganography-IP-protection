@@ -91,12 +91,18 @@ class SteganographyEngine:
         
         return tiled[:, :H, :W].unsqueeze(0)
 
-    def embed_uuid(self, image_path, output_path):
+    def embed_uuid(self, image_path, output_path, target_uuid=None):
         image = Image.open(image_path).convert('RGB')
         cover_tensor = self.transform(image).unsqueeze(0).to(self.device)
         _, _, H, W = cover_tensor.shape
 
-        raw_uuid = uuid.uuid4()
+        if target_uuid is None:
+            raw_uuid = uuid.uuid4()
+        elif isinstance(target_uuid, str):
+            raw_uuid = uuid.UUID(target_uuid)
+        else:
+            raw_uuid = target_uuid
+            
         encoded_bytes = self.fec_pipeline.rs.encode(raw_uuid.bytes)
         bits = [float((byte >> i) & 1) for byte in encoded_bytes for i in range(7, -1, -1)]
         bits_tensor = torch.tensor(bits).to(self.device)
