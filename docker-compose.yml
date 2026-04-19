@@ -1,4 +1,24 @@
 services:
+  # --- FASTAPI APP ---
+  app:
+    build: .
+    container_name: stego_app_prod
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # --- POSTGRES DATABASE ---
   db:
     image: postgres:16-alpine 
     container_name: IP_postgres

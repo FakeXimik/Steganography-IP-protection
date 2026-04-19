@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.github/
+.vscode/
+assets/
+data/*
+!data/*.py
+logs/
+postgres_data/
+saved_models/
+weights/
+*.pth
+!weights/production/*.pth
+.env
+steganography_IP_protection.egg-info
