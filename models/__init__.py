@@ -1,3 +1,3 @@
-from models.noise import DifferentiableNoiseLayer, StandardNoiseLayer
+from models.noise import AdvancedNoiseLayer, DifferentiableNoiseLayer, StandardNoiseLayer
 
-__all__ = ["DifferentiableNoiseLayer", "StandardNoiseLayer"]
+__all__ = ["AdvancedNoiseLayer", "DifferentiableNoiseLayer", "StandardNoiseLayer"]

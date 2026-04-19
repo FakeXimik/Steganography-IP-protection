@@ -222,6 +222,7 @@ saved_models/
 # Datasets
 data/cifar-100-python.tar.gz
 data/cifar-100-batches-py/
+data/fast_patches
 *.tar.gz
 *.zip
 *.bin
