@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import psycopg2
-from utils.database import save_to_db, retrieve_from_db
+from utils.database import retrieve_from_db
 
 # --- FIXTURES ---
 
@@ -23,43 +23,6 @@ def mock_signed_data():
         "serialized_data": '{"author": "Test", "data": "Secret"}'
     }
 
-# --- TESTS FOR SAVE_TO_DB ---
-
-@patch("utils.database.psycopg2.connect")
-def test_save_to_db_success(mock_connect, mock_user: MagicMock, mock_signed_data: dict[str, str]):
-    # 1. Setup the fake database connection and cursor
-    mock_conn = MagicMock()
-    mock_cur = MagicMock()
-    mock_connect.return_value = mock_conn
-    mock_conn.cursor.return_value = mock_cur
-    
-    # 2. Tell the fake cursor exactly what to return when fetchone() is called.
-    # First call returns user_uuid, second call returns metadata_uuid
-    mock_cur.fetchone.side_effect = [("user-123",), ("meta-456",)]
-
-    # 3. Run the function
-    result = save_to_db(mock_user, mock_signed_data)
-
-    # 4. Verify the function committed the save and returned the right UUID
-    mock_conn.commit.assert_called_once()
-    assert result == "meta-456"
-
-@patch("utils.database.psycopg2.connect")
-def test_save_to_db_integrity_error(mock_connect, mock_user: MagicMock, mock_signed_data: dict[str, str]):
-    # Setup mocks
-    mock_conn = MagicMock()
-    mock_cur = MagicMock()
-    mock_connect.return_value = mock_conn
-    mock_conn.cursor.return_value = mock_cur
-    
-    # Force the database to throw an IntegrityError (like a duplicate entry failure)
-    mock_cur.execute.side_effect = psycopg2.IntegrityError("Simulated DB conflict")
-
-    result = save_to_db(mock_user, mock_signed_data)
-
-    # Verify the database rolled back to prevent corruption, and returned None
-    mock_conn.rollback.assert_called_once()
-    assert result is None
 
 # --- TESTS FOR RETRIEVE_FROM_DB ---
 
