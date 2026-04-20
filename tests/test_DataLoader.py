@@ -34,7 +34,7 @@ def test_cifar100_dataloader_mocked(mock_cifar_dataset):
 
     # Initialize your class. 
     # Because of the patch, download=True is safely ignored!
-    cifar = CIFAR100(batch_size=64)
+    cifar = CIFAR100(batch_size=64, num_workers=0)
 
     # Pull a batch from the train loader
     train_iter = iter(cifar.train_loader)
