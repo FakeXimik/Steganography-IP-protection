@@ -1,6 +1,5 @@
 import os
 
-# FIX 1: Solve CUDA Memory Fragmentation BEFORE PyTorch initializes
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
 import shutil, tempfile, asyncio
@@ -9,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-import torch  # FIX 2: Import torch to manually control GPU memory
+import torch 
 
 from models.stego_engine import SteganographyEngine
 import utils.database as database
