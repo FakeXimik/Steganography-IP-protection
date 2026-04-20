@@ -1,9 +1,15 @@
-import os, shutil, tempfile, asyncio
+import os
+
+# FIX 1: Solve CUDA Memory Fragmentation BEFORE PyTorch initializes
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+import shutil, tempfile, asyncio
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import torch  # FIX 2: Import torch to manually control GPU memory
 
 from models.stego_engine import SteganographyEngine
 import utils.database as database
@@ -28,18 +34,19 @@ app = FastAPI(title="HiDDeN Steganography", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"], expose_headers=["Secret-UUID"])
 
+# --- NEW ROUTING SYSTEM ---
 @app.get("/")
-async def serve_hide(): return FileResponse("hide.html")
+async def serve_home(): return FileResponse("about.html")
 
-@app.get("/extract")
-async def serve_extract(): return FileResponse("extract.html")
+@app.get("/sign")
+async def serve_sign(): return FileResponse("hide.html")
 
-@app.get("/about")
-async def serve_about(): return FileResponse("about.html")
+@app.get("/verify")
+async def serve_verify(): return FileResponse("extract.html")
+# --------------------------
 
 @app.get("/api/check_user/{username}")
 async def check_user(username: str):
-    """Prevents key download if nickname exists"""
     username = username.strip().lower()
     try:
         if database.get_user_public_key(username):
@@ -60,7 +67,6 @@ async def register_user(username: str = Form(...), public_key_hex: str = Form(..
 
 @app.post("/api/embed")
 async def embed_image(public_key_hex: str = Form(...), metadata_json: str = Form(...), signature_hex: str = Form(...), file: UploadFile = File(...)):
-    # 1. Identity Check
     try:
         username = database.get_username_by_public_key(public_key_hex)
     except Exception as e:
@@ -69,11 +75,9 @@ async def embed_image(public_key_hex: str = Form(...), metadata_json: str = Form
     if not username: 
         raise HTTPException(status_code=401, detail="Identity key not found in ledger.")
     
-    # 2. Signature Check
     if not crypto.verify_signature(signature_hex, public_key_hex, metadata_json):
         raise HTTPException(status_code=401, detail="Cryptographic verification failed. Invalid signature.")
     
-    # 3. Database Write (Detailed Logging Added)
     try:
         metadata_uuid = database.save_metadata_to_db(username, signature_hex, metadata_json)
     except Exception as e:
@@ -82,7 +86,6 @@ async def embed_image(public_key_hex: str = Form(...), metadata_json: str = Form
     if not metadata_uuid:
         raise HTTPException(status_code=500, detail="Database failed to generate Asset UUID. Re-check unique constraints on signature_hex.")
     
-    # 4. Neural Processing (Detailed Logging Added)
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             shutil.copyfileobj(file.file, tmp)
@@ -93,6 +96,9 @@ async def embed_image(public_key_hex: str = Form(...), metadata_json: str = Form
             ENGINE.embed_uuid(tmp_in, tmp_out, target_uuid=metadata_uuid)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neural Engine Processing Error: {str(e)}")
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     return FileResponse(tmp_out, media_type="image/png", headers={"Secret-UUID": str(metadata_uuid)})
 
@@ -106,6 +112,9 @@ async def extract_image(file: UploadFile = File(...)):
             recovered_uuid = ENGINE.extract_uuid(tmp_in)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neural Engine Extraction Error: {str(e)}")
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     try:
         record = database.retrieve_from_db(str(recovered_uuid)) if recovered_uuid else None
