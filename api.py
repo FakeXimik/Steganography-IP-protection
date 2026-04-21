@@ -19,8 +19,8 @@ async def lifespan(app: FastAPI):
     print("\n[API] Booting up Neural Steganography Engine...")
     try:
         ENGINE = SteganographyEngine(
-            encoder_weights="saved_models/production/best_encoder_full.pth",
-            decoder_weights="saved_models/production/best_decoder_full.pth"
+            encoder_weights="saved_models/encoder_epoch_20.pth",
+            decoder_weights="saved_models/decoder_epoch_20.pth"
         )
         print("[API] Engine loaded into VRAM successfully. Ready for requests.\n")
     except Exception as e:

@@ -14,3 +14,9 @@ weights/
 !weights/production/*.pth
 .env
 steganography_IP_protection.egg-info
+env/
+data/fast_patches/
+data/high_res_images/
+benchmark_runs/
+*.pyc
+.git/
