@@ -78,6 +78,31 @@ def attack_names(attacks: Sequence[AttackSpec] | None = None) -> list[str]:
     return [attack.name for attack in (attacks or default_attack_suite())]
 
 
+def normalize_max_dimension(max_dimension: int | None) -> int | None:
+    if max_dimension is None or max_dimension <= 0:
+        return None
+    return max_dimension
+
+
+def resize_to_max_dimension(image: Image.Image, max_dimension: int | None) -> Image.Image:
+    image = image.convert("RGB")
+    max_dimension = normalize_max_dimension(max_dimension)
+    if max_dimension is None:
+        return image
+
+    width, height = image.size
+    longest_side = max(width, height)
+    if longest_side <= max_dimension:
+        return image
+
+    scale = max_dimension / float(longest_side)
+    resized_size = (
+        max(1, int(round(width * scale))),
+        max(1, int(round(height * scale))),
+    )
+    return image.resize(resized_size, Image.Resampling.LANCZOS)
+
+
 def discover_images(directory: Path, limit: int | None = None) -> list[Path]:
     if not directory.exists():
         raise FileNotFoundError(f"Image directory does not exist: {directory}")
@@ -147,6 +172,7 @@ def create_stego_samples(
     *,
     target_uuid: uuid.UUID,
     limit: int | None = None,
+    max_dimension: int | None = None,
 ) -> list[BenchmarkSample]:
     cover_paths = discover_images(covers_dir, limit=limit)
     stego_output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +181,8 @@ def create_stego_samples(
     for index, cover_path in enumerate(cover_paths, start=1):
         sample_id = _safe_sample_id(index, cover_path)
         stego_path = stego_output_dir / f"{sample_id}.png"
-        engine.embed_uuid(cover_path, stego_path, target_uuid=target_uuid)
+        prepared_cover = open_rgb_image(cover_path, max_dimension=max_dimension)
+        engine.embed_uuid(prepared_cover, stego_path, target_uuid=target_uuid)
         samples.append(
             BenchmarkSample(
                 sample_id=sample_id,
@@ -199,8 +226,8 @@ def save_manifest(path: Path, samples: Sequence[BenchmarkSample]) -> Path:
     return write_csv(path, rows)
 
 
-def open_rgb_image(path: Path) -> Image.Image:
-    return Image.open(path).convert("RGB")
+def open_rgb_image(path: Path, *, max_dimension: int | None = None) -> Image.Image:
+    return resize_to_max_dimension(Image.open(path), max_dimension)
 
 
 def pil_to_float_array(image: Image.Image) -> np.ndarray:
@@ -465,11 +492,13 @@ class WavesBenchmarkSuite:
         *,
         seed: int = 1337,
         save_attacked_images: bool = False,
+        max_dimension: int | None = 512,
     ) -> None:
         self.engine = engine
         self.output_dir = output_dir.resolve()
         self.seed = seed
         self.save_attacked_images = save_attacked_images
+        self.max_dimension = normalize_max_dimension(max_dimension)
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.generated_stego_dir = self.output_dir / "generated_stego"
@@ -488,6 +517,7 @@ class WavesBenchmarkSuite:
             self.generated_stego_dir,
             target_uuid=target_uuid,
             limit=limit,
+            max_dimension=self.max_dimension,
         )
         save_manifest(self.output_dir / "stego_manifest.csv", samples)
         return samples
@@ -515,8 +545,8 @@ class WavesBenchmarkSuite:
         negative_rows: list[dict] = []
 
         for sample in samples:
-            cover_image = open_rgb_image(sample.cover_path)
-            stego_image = open_rgb_image(sample.stego_path)
+            cover_image = open_rgb_image(sample.cover_path, max_dimension=self.max_dimension)
+            stego_image = open_rgb_image(sample.stego_path, max_dimension=self.max_dimension)
             expected_bits = self.engine.uuid_to_payload_bits(sample.target_uuid)
 
             clean_details = self.engine.extract_payload_details(cover_image)
@@ -591,6 +621,7 @@ class WavesBenchmarkSuite:
             "samples": len(samples),
             "positive_examples": len(positive_rows),
             "negative_examples": len(negative_rows),
+            "max_dimension": self.max_dimension,
         }
         roc_summary_path = write_json(self.output_dir / "roc_summary.json", roc_summary)
         roc_plot_path = maybe_plot_roc_curve(roc_points, self.output_dir / "roc_curve.png") if write_roc_plot else None
@@ -619,5 +650,7 @@ __all__ = [
     "compute_roc_points",
     "default_attack_suite",
     "load_samples_from_manifest",
+    "normalize_max_dimension",
+    "resize_to_max_dimension",
     "select_attacks",
 ]

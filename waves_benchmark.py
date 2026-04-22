@@ -35,13 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-weights",
         type=Path,
-        default=Path("saved_models/production/best_encoder_full.pth"),
+        default=Path("saved_models/best_encoder_full.pth"),
         help="Path to the trained encoder weights.",
     )
     parser.add_argument(
         "--decoder-weights",
         type=Path,
-        default=Path("saved_models/production/best_decoder_full.pth"),
+        default=Path("best_models/best_decoder_full.pth"),
         help="Path to the trained decoder weights.",
     )
     parser.add_argument(
@@ -65,6 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.001,
         help="Desired false-positive rate for the BER detection threshold. Default: 0.001 (0.1%%).",
+    )
+    parser.add_argument(
+        "--max-dimension",
+        type=int,
+        default=512,
+        help="Resize each image so its longest side is at most this many pixels before embedding/extraction. Use 0 to disable. Default: 512.",
     )
     parser.add_argument(
         "--save-attacked-images",
@@ -110,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_dir,
         seed=args.seed,
         save_attacked_images=args.save_attacked_images,
+        max_dimension=args.max_dimension,
     )
 
     if args.manifest_csv is not None:
@@ -132,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Output directory: {args.output_dir.resolve()}")
     print(f"Samples benchmarked: {len(samples)}")
+    print(f"Max dimension: {args.max_dimension if args.max_dimension > 0 else 'full resolution'}")
     if target_uuid is not None:
         print(f"Target UUID: {target_uuid}")
     print(f"Positive results: {artifacts['positive_results']}")

@@ -13,6 +13,7 @@ from WAVES import (
     calculate_ssim,
     compute_roc_points,
     default_attack_suite,
+    resize_to_max_dimension,
 )
 
 
@@ -43,6 +44,15 @@ def test_crop_attack_preserves_original_dimensions():
     attacked = apply_attack(image, attack, random.Random(1337))
 
     assert attacked.size == image.size
+
+
+def test_resize_to_max_dimension_caps_longest_side_and_preserves_aspect_ratio():
+    image = make_test_image(size=160)
+    image = image.resize((1600, 800))
+
+    resized = resize_to_max_dimension(image, 512)
+
+    assert resized.size == (512, 256)
 
 
 def test_identical_images_have_perfect_similarity_metrics():
