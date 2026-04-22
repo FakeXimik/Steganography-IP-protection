@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>STEGANOGRAPHY - Sign</title>
+    <link rel="stylesheet" href="/static/style.css?v=6"><script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <nav>
+        <a href="/">HOME</a>
+        <a href="/sign" class="active">SIGN</a>
+        <a href="/verify">VERIFY</a>
+    </nav>
+    <div class="container">
+        <h1>SIGN ASSET</h1>
+        <div class="card" id="mainCard">
+            <form id="embedForm">
+                <label>Target Asset</label>
+                <div class="dropzone" id="protectDrop">
+                    <i data-lucide="image-plus" color="#3b82f6" size="56"></i>
+                    <p id="protectText">Drop high-res image or click to browse</p>
+                    <input type="file" id="embedImage" accept="image/*" required>
+                </div>
+                <label>Ownership Statement</label>
+                <input type="text" id="secretText" placeholder="e.g. Copyright 2026" required>
+                <label>Private Identity (.pem)</label>
+                <div class="key-container">
+                    <textarea id="privateKeyText" class="key-box" placeholder="Paste private key content here..."></textarea>
+                    <div class="key-overlay-actions">
+                        <button type="button" id="btnPaste" class="overlay-btn"><i data-lucide="clipboard" size="14"></i> Paste</button>
+                        <div class="overlay-btn" style="position:relative;"><i data-lucide="file-key" size="14"></i> Attach
+                            <input type="file" id="keyFile" style="position:absolute; opacity:0; inset:0; cursor:pointer;">
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" class="main-btn">EMBED NEURAL PROTECTION</button>
+            </form>
+            <div id="embedResult" class="result"></div>
+        </div>
+        <div class="reg-footer">
+            <p>New user? <span id="toggleReg" style="color:#3b82f6; text-decoration:underline; cursor:pointer;">Generate unique identity</span></p>
+            <div id="registerSection" class="card" style="display:none; margin-top:20px; border-color: var(--success-green);">
+                <form id="registerForm">
+                    <input type="text" id="regUsername" placeholder="Enter nickname" required>
+                    <button type="submit" class="main-btn" style="background: var(--success-green)">GENERATE & DOWNLOAD</button>
+                </form>
+                <div id="registerResult" class="result"></div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        <p>&copy; 2026 STEGANOGRAPHY IP PROTECTION. Zero-Trust Architecture. All rights reserved.</p>
+    </footer>
+
+    <script type="module">
+        import { generateKeyPair, importPrivateKey, signMetadata, getPublicKeyHexFromPEM } from '/static/crypto_client.js';
+        lucide.createIcons();
+
+        document.getElementById('embedImage').onchange = (e) => {
+            if(e.target.files.length > 0) {
+                document.getElementById('protectDrop').classList.add('attached');
+                document.getElementById('protectText').innerText = `Selected: ${e.target.files[0].name}`;
+            }
+        };
+
+        document.getElementById('registerForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const user = document.getElementById('regUsername').value.toLowerCase();
+            const resDiv = document.getElementById('registerResult');
+            
+            resDiv.style.display = 'block'; 
+            resDiv.innerHTML = "Verifying availability...";
+            resDiv.style.borderColor = "var(--border-color)";
+
+            try {
+                const check = await fetch(`/api/check_user/${user}`);
+                if (!check.ok) {
+                    resDiv.innerHTML = `❌ Error: ${(await check.json()).detail}`;
+                    resDiv.style.borderColor = "var(--error-red)"; 
+                    return;
+                }
+                
+                const keys = await generateKeyPair();
+                const blob = new Blob([keys.privatePem], { type: 'application/x-pem-file' });
+                const a = document.createElement('a'); 
+                a.href = URL.createObjectURL(blob); 
+                a.download = `${user}_key.pem`;
+                document.body.appendChild(a); 
+                a.click(); 
+                document.body.removeChild(a);
+
+                if (confirm("Download triggered. Did you save the file?")) {
+                    const fd = new FormData(); 
+                    fd.append('username', user); 
+                    fd.append('public_key_hex', keys.publicHex);
+                    
+                    const res = await fetch('/api/register', { method: 'POST', body: fd });
+                    if(res.ok) { 
+                        resDiv.innerHTML = "✅ Identity Registered!"; 
+                        resDiv.style.borderColor = "var(--success-green)"; 
+                    } else {
+                        resDiv.innerHTML = `❌ Error: ${(await res.json()).detail}`;
+                        resDiv.style.borderColor = "var(--error-red)"; 
+                    }
+                } else {
+                    resDiv.innerHTML = "❌ Aborted: Registration cancelled by user.";
+                    resDiv.style.borderColor = "var(--error-red)"; 
+                }
+            } catch (err) { 
+                console.error(err);
+                resDiv.innerHTML = `❌ System Error: ${err.message}`; 
+                resDiv.style.borderColor = "var(--error-red)"; 
+            }
+        };
+
+        document.getElementById('embedForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const resDiv = document.getElementById('embedResult');
+            resDiv.style.display = 'block'; 
+            resDiv.innerHTML = "Neural Encoding...";
+            resDiv.style.borderColor = "var(--border-color)";
+            
+            try {
+                const pem = document.getElementById('privateKeyText').value;
+                if (!pem.trim()) throw new Error("Please provide your private key (.pem).");
+                
+                const pubHex = await getPublicKeyHexFromPEM(pem);
+                const pkObj = await importPrivateKey(pem);
+
+                const metadata = {
+                    data: document.getElementById('secretText').value,
+                    timestamp: new Date().toISOString(),
+                    nonce: crypto.randomUUID() 
+                };
+
+                const { signatureHex, jsonString } = await signMetadata(pkObj, metadata);
+                const fd = new FormData();
+                fd.append('public_key_hex', pubHex); 
+                fd.append('metadata_json', jsonString);
+                fd.append('signature_hex', signatureHex); 
+                fd.append('file', document.getElementById('embedImage').files[0]);
+
+                const res = await fetch('/api/embed', { method: 'POST', body: fd });
+                if(res.ok) {
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob); 
+                    
+                    const a = document.createElement('a'); 
+                    a.href = url; 
+                    a.download = "protected.png"; 
+                    a.click();
+                    
+                    const uuid = res.headers.get("Secret-UUID") || "Generated successfully";
+
+                    resDiv.innerHTML = `
+                        <div style="margin-bottom: 10px;">
+                            <span style="color:var(--success-green); font-weight:bold;">✅ Success!</span> Asset Protected.
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 15px;">
+                            UUID: ${uuid}
+                        </div>
+                        
+                        <img src="${url}" alt="Protected Asset Preview" style="max-width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--border-color); display: block; margin: 15px auto; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                        
+                        <a href="${url}" download="protected.png" style="display: block; text-align: center; background: var(--accent-gradient); color: white; padding: 14px; border-radius: 10px; text-decoration: none; font-weight: bold; margin-top: 15px; box-sizing: border-box;">
+                            <i data-lucide="download" style="vertical-align: middle; margin-right: 6px;" size="18"></i> DOWNLOAD ASSET
+                        </a>
+                    `;
+                    resDiv.style.borderColor = "var(--success-green)";
+                    
+                    lucide.createIcons();
+                    
+                } else {
+                    resDiv.innerHTML = `❌ Backend Error: ${(await res.json()).detail}`;
+                    resDiv.style.borderColor = "var(--error-red)";
+                }
+            } catch (err) { 
+                console.error(err);
+                resDiv.innerHTML = `❌ Key Error: ${err.message}`; 
+                resDiv.style.borderColor = "var(--error-red)";
+            }
+        };
+
+        document.getElementById('toggleReg').onclick = () => {
+            const el = document.getElementById('registerSection');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        };
+        document.getElementById('btnPaste').onclick = async () => { 
+            document.getElementById('privateKeyText').value = await navigator.clipboard.readText(); 
+        };
+        document.getElementById('keyFile').onchange = async (e) => { 
+            if(e.target.files.length > 0) document.getElementById('privateKeyText').value = await e.target.files[0].text(); 
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>STEGANOGRAPHY - Verify</title>
+    <link rel="stylesheet" href="/static/style.css"><script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <nav>
+        <a href="/">HOME</a>
+        <a href="/sign">SIGN</a>
+        <a href="/verify" class="active">VERIFY</a>
+    </nav>
+    <div class="container">
+        <h1>VERIFY SIGNATURE</h1>
+        <div class="card" id="extractCard">
+            <form id="extractForm">
+                <label>Target Asset</label>
+                <div class="dropzone" id="extractDrop">
+                    <i data-lucide="image-plus" color="#3b82f6" size="56"></i>
+                    <p id="extractText">Drop protected asset or click to browse</p>
+                    <input type="file" id="extractImage" accept="image/*" required>
+                </div>
+                <button type="submit" class="main-btn">SCAN FOR WATERMARK</button>
+            </form>
+            <div id="extractResult" class="result"></div>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        <p>&copy; 2026 STEGANOGRAPHY IP PROTECTION. Zero-Trust Architecture. All rights reserved.</p>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+
+        document.getElementById('extractImage').onchange = (e) => {
+            if(e.target.files.length > 0) {
+                document.getElementById('extractDrop').classList.add('attached');
+                document.getElementById('extractText').innerText = `Selected: ${e.target.files[0].name}`;
+            }
+        };
+
+        document.getElementById('extractForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const card = document.getElementById('extractCard');
+            const resDiv = document.getElementById('extractResult');
+            
+            resDiv.style.display = 'block'; 
+            resDiv.innerHTML = "Scanning Neural Layers...";
+            resDiv.style.borderColor = "var(--border-color)";
+            card.classList.remove('status-success', 'status-error');
+            
+            const fd = new FormData();
+            fd.append('file', document.getElementById('extractImage').files[0]);
+            
+            try {
+                const res = await fetch('/api/extract', { method: 'POST', body: fd });
+                if(res.ok) {
+                    const data = await res.json();
+                    card.classList.add('status-success');
+                    
+                    let displayData = data.metadata;
+                    let displayTime = "Unknown";
+                    
+                    try {
+                        const parsed = JSON.parse(data.metadata);
+                        if (parsed.data) displayData = parsed.data;
+                        
+                        if (parsed.timestamp) {
+                            const dateObj = new Date(parsed.timestamp);
+                            displayTime = dateObj.toLocaleString(undefined, { 
+                                year: 'numeric', month: 'short', day: 'numeric', 
+                                hour: '2-digit', minute: '2-digit', second: '2-digit' 
+                            });
+                        }
+                    } catch(e) {}
+
+                    resDiv.innerHTML = `<h3 style="color:var(--success-green); margin-top:0;">Provenance Confirmed</h3>
+                    <div style="margin-bottom: 8px;"><b>Owner Identity:</b> <span style="color:#fff;">${data.owner_username}</span></div>
+                    <div style="margin-bottom: 8px;"><b>Statement:</b> <span style="color:#fff;">${displayData}</span></div>
+                    <div><b>Signed On:</b> <span style="color:#fff;">${displayTime}</span></div>`;
+                    resDiv.style.borderColor = "var(--success-green)";
+                    
+                } else {
+                    card.classList.add('status-error');
+                    resDiv.innerHTML = `❌ Scan Failed: ${(await res.json()).detail}`;
+                    resDiv.style.borderColor = "var(--error-red)";
+                }
+            } catch (err) { 
+                card.classList.add('status-error'); 
+                resDiv.innerHTML = "❌ System Error: Neural Engine Unreachable."; 
+                resDiv.style.borderColor = "var(--error-red)";
+            }
+        };
+    </script>
+</body>
+</html>
