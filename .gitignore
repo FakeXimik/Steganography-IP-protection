@@ -1,6 +1,7 @@
 # Folder to hold data temporarily
 Assets
 assets
+benchmark_runs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -235,3 +236,5 @@ data/cifar-100-python/meta
 data/cifar-100-python/test
 data/cifar-100-python/train
 weights/
+
+.codex

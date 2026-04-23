@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import uuid
 import os
+from pathlib import Path
 
 from models.encoder_dense import EncoderDense
 from models.decoder_dense import DecoderDense
@@ -79,6 +80,69 @@ class SteganographyEngine:
         
         print("[SYSTEM] Engine Ready.")
 
+    def _load_image(self, image_source):
+        if isinstance(image_source, Image.Image):
+            return image_source.convert("RGB")
+        if isinstance(image_source, (str, os.PathLike, Path)):
+            return Image.open(image_source).convert("RGB")
+        raise TypeError("image_source must be a file path or a PIL.Image.Image instance.")
+
+    def uuid_to_payload_bits(self, target_uuid):
+        if isinstance(target_uuid, str):
+            target_uuid = uuid.UUID(target_uuid)
+
+        encoded_bytes = self.fec_pipeline.rs.encode(target_uuid.bytes)
+        bits = []
+        for byte in encoded_bytes:
+            for i in range(7, -1, -1):
+                bits.append((byte >> i) & 1)
+        return bits
+
+    @staticmethod
+    def payload_bits_to_bytes(bits):
+        recovered_bytes = bytearray()
+        for i in range(0, len(bits), 8):
+            byte_val = 0
+            for bit in bits[i:i + 8]:
+                byte_val = (byte_val << 1) | int(bit)
+            recovered_bytes.append(byte_val)
+        return bytes(recovered_bytes)
+
+    def _aggregate_stamp_logits(self, decoded_logits, mask):
+        logits = decoded_logits.squeeze(0)
+        mask = mask.squeeze(0)
+        _, H, W = logits.shape
+
+        pad_h = (self.stamp_size - (H % self.stamp_size)) % self.stamp_size
+        pad_w = (self.stamp_size - (W % self.stamp_size)) % self.stamp_size
+
+        logits_padded = F.pad(logits, (0, pad_w, 0, pad_h))
+        mask_padded = F.pad(mask, (0, pad_w, 0, pad_h))
+
+        NH = logits_padded.shape[1] // self.stamp_size
+        NW = logits_padded.shape[2] // self.stamp_size
+
+        stamps_logits = logits_padded.view(
+            self.data_depth,
+            NH,
+            self.stamp_size,
+            NW,
+            self.stamp_size,
+        )
+        stamps_logits = stamps_logits.permute(1, 3, 0, 2, 4).reshape(
+            -1,
+            self.data_depth,
+            self.stamp_size,
+            self.stamp_size,
+        )
+
+        stamps_mask = mask_padded.view(1, NH, self.stamp_size, NW, self.stamp_size)
+        stamps_mask = stamps_mask.permute(1, 3, 0, 2, 4).reshape(-1, 1, self.stamp_size, self.stamp_size)
+
+        weighted_sum = (stamps_logits * stamps_mask).sum(dim=0)
+        total_weight = stamps_mask.sum(dim=0) + 1e-8
+        return weighted_sum / total_weight
+
     def _create_tiled_payload(self, bits_tensor, H, W):
         stamp = torch.zeros((self.data_depth, self.stamp_size, self.stamp_size)).to(self.device)
         flat_stamp = stamp.view(-1)
@@ -92,7 +156,7 @@ class SteganographyEngine:
         return tiled[:, :H, :W].unsqueeze(0)
 
     def embed_uuid(self, image_path, output_path, target_uuid=None):
-        image = Image.open(image_path).convert('RGB')
+        image = self._load_image(image_path)
         cover_tensor = self.transform(image).unsqueeze(0).to(self.device)
         _, _, H, W = cover_tensor.shape
 
@@ -103,8 +167,7 @@ class SteganographyEngine:
         else:
             raw_uuid = target_uuid
             
-        encoded_bytes = self.fec_pipeline.rs.encode(raw_uuid.bytes)
-        bits = [float((byte >> i) & 1) for byte in encoded_bytes for i in range(7, -1, -1)]
+        bits = [float(bit) for bit in self.uuid_to_payload_bits(raw_uuid)]
         bits_tensor = torch.tensor(bits).to(self.device)
 
         payload = self._create_tiled_payload(bits_tensor, H, W)
@@ -121,49 +184,37 @@ class SteganographyEngine:
         transforms.ToPILImage()(stego_01.squeeze(0).cpu().clamp(0, 1)).save(output_path, format="PNG")
         return raw_uuid
 
-    def extract_uuid(self, image_path):
-        image = Image.open(image_path).convert('RGB')
+    def extract_payload_details(self, image_source):
+        image = self._load_image(image_source)
         stego_tensor = self.transform(image).unsqueeze(0).to(self.device)
-        _, _, H, W = stego_tensor.shape
 
         with torch.no_grad():
             decoded_logits = self.decoder(stego_tensor)
-            
-            # Use matching strictness to isolate the exact areas the encoder targeted
             mask = self.mask_module(stego_tensor, strictness=1.0)
 
-        mask_active_pct = (mask > 0.5).float().mean().item()
-        print(f"   [DEBUG] Forensic Mask Active: {mask_active_pct:.1%} of pixels")
-
-        pad_h = (self.stamp_size - (H % self.stamp_size)) % self.stamp_size
-        pad_w = (self.stamp_size - (W % self.stamp_size)) % self.stamp_size
-        logits_padded = F.pad(decoded_logits, (0, pad_w, 0, pad_h))
-        mask_padded = F.pad(mask, (0, pad_w, 0, pad_h))
-        
-        NH = logits_padded.shape[2] // self.stamp_size
-        NW = logits_padded.shape[3] // self.stamp_size
-
-        stamps_logits = logits_padded.view(self.data_depth, NH, self.stamp_size, NW, self.stamp_size)
-        stamps_logits = stamps_logits.permute(1, 3, 0, 2, 4).reshape(-1, self.data_depth, self.stamp_size, self.stamp_size)
-        
-        stamps_mask = mask_padded.view(1, NH, self.stamp_size, NW, self.stamp_size)
-        stamps_mask = stamps_mask.permute(1, 3, 0, 2, 4).reshape(-1, 1, self.stamp_size, self.stamp_size)
-
-        weighted_sum = (stamps_logits * stamps_mask).sum(dim=0)
-        total_weight = stamps_mask.sum(dim=0) + 1e-8
-        final_stamp = weighted_sum / total_weight 
-
+        final_stamp = self._aggregate_stamp_logits(decoded_logits, mask)
         predicted_bits = (torch.sigmoid(final_stamp.view(-1)) > 0.5).int()
-        bits_list = predicted_bits[:self.payload_bits_count].tolist()
-
-        recovered_bytes = bytearray()
-        for i in range(0, len(bits_list), 8):
-            byte_val = 0
-            for bit in bits_list[i:i+8]: byte_val = (byte_val << 1) | bit
-            recovered_bytes.append(byte_val)
+        bits_list = predicted_bits[:self.payload_bits_count].cpu().tolist()
+        payload_bytes = self.payload_bits_to_bytes(bits_list)
+        mask_active_pct = (mask > 0.5).float().mean().item()
+        decoded_uuid = None
+        decode_error = None
 
         try:
-            decoded_message, _, _ = self.fec_pipeline.rs.decode(recovered_bytes)
-            return uuid.UUID(bytes=bytes(decoded_message))
-        except Exception as e:
-            return None
+            decoded_message, _, _ = self.fec_pipeline.rs.decode(payload_bytes)
+            decoded_uuid = uuid.UUID(bytes=bytes(decoded_message))
+        except Exception as exc:
+            decode_error = str(exc)
+
+        return {
+            "bits": bits_list,
+            "payload_bytes": payload_bytes,
+            "decoded_uuid": decoded_uuid,
+            "decode_error": decode_error,
+            "mask_active_pct": mask_active_pct,
+            "raw_logits": final_stamp.view(-1)[:self.payload_bits_count].detach().cpu(),
+        }
+
+    def extract_uuid(self, image_path):
+        details = self.extract_payload_details(image_path)
+        return details["decoded_uuid"]
