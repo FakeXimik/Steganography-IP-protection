@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--encoder-weights",
         type=Path,
-        default=Path("saved_models/best_encoder_full.pth"),
+        default=Path("weights/production/best_encoder_full.pth"),
         help="Path to the trained encoder weights.",
     )
     parser.add_argument(
