@@ -9,8 +9,12 @@ data/*
 logs/
 postgres_data/
 saved_models/
-weights/
-*.pth
+
+weights/*
+!weights/production/
+weights/production/*
 !weights/production/*.pth
+
+*.pth
 .env
 steganography_IP_protection.egg-info

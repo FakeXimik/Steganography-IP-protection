@@ -8,7 +8,7 @@ load_dotenv()
 
 def get_db_connection():
     return psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
+        host=os.getenv("DB_HOST", "db"),
         port=5432,
         dbname=os.getenv("DB_NAME", "stegdb"),
         user=os.getenv("DB_USER", "postgres"),
